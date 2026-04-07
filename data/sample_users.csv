@@ -1,0 +1,7 @@
+user_id,status,role
+test1,TRUE,admin
+u1001,active,analyst
+u1002,active,admin
+u1003,inactive,viewer
+u1004,active,system_admin
+u1005,active,editor

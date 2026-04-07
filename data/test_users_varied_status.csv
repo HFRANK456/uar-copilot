@@ -1,0 +1,10 @@
+user_id,status,role
+u2001,Enabled,Admin
+u2002,TRUE,system_admin
+u2003,1,viewer
+u2004,Disabled,editor
+u2005,false,analyst
+u2006,No,admin
+u2007,Yes,viewer
+u2008,active,admin
+u2009,inactive,viewer
