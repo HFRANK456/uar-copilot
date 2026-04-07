@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import './App.css'
 
 const API_URL = 'https://uar-copilot.onrender.com/upload'
@@ -190,10 +191,6 @@ function App() {
               Download JSON
             </button>
           </div>
-          <p className="hint">
-            Tip: Use the sample files in the backend data folder to validate the
-            pipeline.
-          </p>
         </form>
 
         <section className="panel results">
@@ -250,6 +247,7 @@ function App() {
         <span>UAR Copilot • Internal Audit Preview</span>
         <span>Backend: Connected</span>
       </footer>
+      <Analytics />
     </div>
   )
 }
