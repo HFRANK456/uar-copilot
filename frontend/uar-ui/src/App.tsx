@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import './App.css'
 
-const API_URL = 'http://127.0.0.1:8000/upload'
+const API_URL = 'https://uar-copilot.onrender.com/upload'
 
 type AggregatedUser = {
   user_id: string
