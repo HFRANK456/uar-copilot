@@ -5,8 +5,25 @@ from typing import List
 from pydantic import BaseModel
 
 
-class AggregatedUser(BaseModel):
-    user_id: str
-    issues: List[str]
+class Issue(BaseModel):
+    type: str
     severity: str
-    explanations: List[str]
+    explanation: str
+
+
+class Finding(BaseModel):
+    user_id: str
+    severity: str
+    issues: List[Issue]
+
+
+class Summary(BaseModel):
+    high: int
+    medium: int
+    low: int
+    total: int
+
+
+class UploadResponse(BaseModel):
+    summary: Summary
+    findings: List[Finding]

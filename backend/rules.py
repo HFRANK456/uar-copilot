@@ -7,7 +7,7 @@ import pandas as pd
 
 from backend.rule_registry import RULES
 from utils import is_admin_role, require_columns
-from schemas.user_schema import AggregatedUser
+from schemas.user_schema import Finding, Issue
 
 
 TERMINATED_USER = "terminated_user"
@@ -228,24 +228,27 @@ def aggregate_results(results):
         if uid not in aggregated:
             aggregated[uid] = {
                 "user_id": uid,
-                "issues": [],
                 "severity": r["severity"],
-                "explanations": [],
+                "issues": [],
             }
 
-        aggregated[uid]["issues"].append(r["issue_type"])
-        aggregated[uid]["explanations"].append(r["explanation"])
+        aggregated[uid]["issues"].append(
+            Issue(
+                type=r["issue_type"],
+                severity=r["severity"],
+                explanation=r["explanation"],
+            )
+        )
 
         # upgrade severity if higher
         if priority[r["severity"]] > priority[aggregated[uid]["severity"]]:
             aggregated[uid]["severity"] = r["severity"]
 
     return [
-        AggregatedUser(
+        Finding(
             user_id=v["user_id"],
-            issues=v["issues"],
             severity=v["severity"],
-            explanations=v["explanations"],
+            issues=v["issues"],
         )
         for v in aggregated.values()
     ]
@@ -253,7 +256,7 @@ def aggregate_results(results):
 
 def flag_users(
     user_access: pd.DataFrame, termination: pd.DataFrame
-) -> List[AggregatedUser]:
+) -> List[Finding]:
     merged = merge_data(user_access, termination)
     evaluation_df = compute_flags(merged)
     results = evaluate_rules(evaluation_df)

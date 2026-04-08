@@ -4,14 +4,31 @@ import './App.css'
 
 const API_URL = 'https://uar-copilot.onrender.com/upload'
 
-type AggregatedUser = {
-  user_id: string
-  issues: string[]
+type Issue = {
+  type: string
   severity: 'high' | 'medium' | 'low' | string
-  explanations: string[]
+  explanation: string
 }
 
-function prettifyIssue(issue: string, explanation: string) {
+type Finding = {
+  user_id: string
+  severity: 'high' | 'medium' | 'low' | string
+  issues: Issue[]
+}
+
+type UploadSummary = {
+  high: number
+  medium: number
+  low: number
+  total: number
+}
+
+type UploadResponse = {
+  summary: UploadSummary
+  findings: Finding[]
+}
+
+function prettifyIssue(issueType: string, explanation: string) {
   const roleMatch = /role='([^']+)'/i.exec(explanation)
   const statusMatch = /status='([^']+)'/i.exec(explanation)
   const termMatch = /termination_date='([^']+)'/i.exec(explanation)
@@ -19,7 +36,7 @@ function prettifyIssue(issue: string, explanation: string) {
   const status = statusMatch?.[1]
   const terminationDate = termMatch?.[1]
 
-  if (issue === 'admin_role') {
+  if (issueType === 'admin_role') {
     return {
       title: 'Administrative Access Detected',
       summary: role
@@ -28,7 +45,7 @@ function prettifyIssue(issue: string, explanation: string) {
     }
   }
 
-  if (issue === 'terminated_active') {
+  if (issueType === 'terminated_active') {
     const dateText = terminationDate ? `Termination date: ${terminationDate}.` : ''
     const statusText = status ? `Current status: ${status}.` : ''
     return {
@@ -39,7 +56,7 @@ function prettifyIssue(issue: string, explanation: string) {
   }
 
   return {
-    title: issue.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    title: issueType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
     summary: explanation,
   }
 }
@@ -47,20 +64,18 @@ function prettifyIssue(issue: string, explanation: string) {
 function App() {
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
-  const [results, setResults] = useState<AggregatedUser[]>([])
+  const [results, setResults] = useState<Finding[]>([])
+  const [summary, setSummary] = useState<UploadSummary>({
+    high: 0,
+    medium: 0,
+    low: 0,
+    total: 0,
+  })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
 
-  const summary = useMemo(() => {
-    const counts = { high: 0, medium: 0, low: 0, total: results.length }
-    for (const r of results) {
-      if (r.severity === 'high') counts.high += 1
-      else if (r.severity === 'medium') counts.medium += 1
-      else if (r.severity === 'low') counts.low += 1
-    }
-    return counts
-  }, [results])
+  const hasFindings = useMemo(() => results.length > 0, [results])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -85,8 +100,9 @@ function App() {
         const text = await res.text()
         throw new Error(text || 'Request failed')
       }
-      const data = (await res.json()) as AggregatedUser[]
-      setResults(data)
+      const data = (await res.json()) as UploadResponse
+      setResults(data.findings)
+      setSummary(data.summary)
       setLastRunAt(new Date().toLocaleString())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unexpected error')
@@ -186,7 +202,7 @@ function App() {
               type="button"
               className="ghost"
               onClick={downloadJson}
-              disabled={results.length === 0}
+              disabled={hasFindings === false}
             >
               Download JSON
             </button>
@@ -222,10 +238,12 @@ function App() {
                   </span>
                   <div className="issues">
                     {item.issues.map((issue, idx) => (
-                      <div key={issue + idx} className="issue">
+                      <div key={issue.type + idx} className="issue">
                         {(() => {
-                          const expl = item.explanations[idx] ?? ''
-                          const pretty = prettifyIssue(issue, expl)
+                          const pretty = prettifyIssue(
+                            issue.type,
+                            issue.explanation ?? ''
+                          )
                           return (
                             <>
                               <div className="issue-title">{pretty.title}</div>

@@ -21,3 +21,6 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Docs
+UAR_Copilot_PRD_V2.pdf
