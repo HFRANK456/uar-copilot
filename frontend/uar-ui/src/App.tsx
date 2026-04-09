@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
+import { useAuth0 } from '@auth0/auth0-react'
 import './App.css'
 
 const API_URL = 'https://uar-copilot.onrender.com/upload'
@@ -62,6 +63,11 @@ function prettifyIssue(issueType: string, explanation: string) {
 }
 
 function App() {
+  const auth0Configured = Boolean(
+    import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID
+  )
+  const auth0 = auth0Configured ? useAuth0() : null
+
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
@@ -81,6 +87,11 @@ function App() {
     e.preventDefault()
     setError(null)
 
+    if (auth0Configured && auth0 && auth0.isAuthenticated === false) {
+      setError('Please sign in before running a review.')
+      return
+    }
+
     if (userFile === null || terminationFile === null) {
       setError('Please attach both CSV files before running the review.')
       return
@@ -92,9 +103,18 @@ function App() {
 
     try {
       setLoading(true)
+      const token =
+        auth0Configured && auth0
+          ? await auth0.getAccessTokenSilently({
+              authorizationParams: {
+                audience: import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined,
+              },
+            })
+          : null
       const res = await fetch(API_URL, {
         method: 'POST',
         body: formData,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       })
       if (res.ok === false) {
         const text = await res.text()
@@ -133,6 +153,34 @@ function App() {
             Upload access and termination files to generate an audit-grade risk
             summary with prioritized findings.
           </p>
+          {auth0Configured && auth0 ? (
+            <div className="auth">
+              {auth0.isAuthenticated ? (
+                <>
+                  <span className="auth-label">
+                    Signed in{auth0.user?.email ? ` as ${auth0.user.email}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() =>
+                      auth0.logout({ logoutParams: { returnTo: window.location.origin } })
+                    }
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => auth0.loginWithRedirect()}
+                >
+                  Sign in
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="hero-card">
           <div className="stat">

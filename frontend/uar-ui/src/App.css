@@ -31,6 +31,19 @@ h1 {
   max-width: 540px;
 }
 
+.auth {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.auth-label {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 .hero-card {
   background: linear-gradient(135deg, #ffffff, #f6fbf9);
   border: 1px solid var(--border);
