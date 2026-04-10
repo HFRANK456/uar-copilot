@@ -29,6 +29,10 @@ type UploadResponse = {
   findings: Finding[]
 }
 
+const authEnabled = Boolean(
+  import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID
+)
+
 function prettifyIssue(issueType: string, explanation: string) {
   const roleMatch = /role='([^']+)'/i.exec(explanation)
   const statusMatch = /status='([^']+)'/i.exec(explanation)
@@ -62,12 +66,8 @@ function prettifyIssue(issueType: string, explanation: string) {
   }
 }
 
-function App() {
-  const auth0Configured = Boolean(
-    import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID
-  )
-  const auth0 = auth0Configured ? useAuth0() : null
-
+function AppAuthed() {
+  const auth0 = useAuth0()
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
@@ -87,8 +87,8 @@ function App() {
     e.preventDefault()
     setError(null)
 
-    if (auth0Configured && auth0 && auth0.isAuthenticated === false) {
-      setError('Please sign in before running a review.')
+    if (auth0.isAuthenticated === false) {
+      await auth0.loginWithRedirect()
       return
     }
 
@@ -103,18 +103,15 @@ function App() {
 
     try {
       setLoading(true)
-      const token =
-        auth0Configured && auth0
-          ? await auth0.getAccessTokenSilently({
-              authorizationParams: {
-                audience: import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined,
-              },
-            })
-          : null
+      const token = await auth0.getAccessTokenSilently({
+        authorizationParams: {
+          audience: import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined,
+        },
+      })
       const res = await fetch(API_URL, {
         method: 'POST',
         body: formData,
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: { Authorization: `Bearer ${token}` },
       })
       if (res.ok === false) {
         const text = await res.text()
@@ -125,7 +122,12 @@ function App() {
       setSummary(data.summary)
       setLastRunAt(new Date().toLocaleString())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unexpected error')
+      const msg = err instanceof Error ? err.message : 'Unexpected error'
+      if (msg.toLowerCase().includes('missing bearer token')) {
+        setError('Please sign in before running the review.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
@@ -153,34 +155,34 @@ function App() {
             Upload access and termination files to generate an audit-grade risk
             summary with prioritized findings.
           </p>
-          {auth0Configured && auth0 ? (
-            <div className="auth">
-              {auth0.isAuthenticated ? (
-                <>
-                  <span className="auth-label">
-                    Signed in{auth0.user?.email ? ` as ${auth0.user.email}` : ''}
-                  </span>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() =>
-                      auth0.logout({ logoutParams: { returnTo: window.location.origin } })
-                    }
-                  >
-                    Sign out
-                  </button>
-                </>
-              ) : (
+          <div className="auth">
+            {auth0.isAuthenticated ? (
+              <>
+                <span className="auth-label">
+                  Signed in{auth0.user?.email ? ` as ${auth0.user.email}` : ''}
+                </span>
                 <button
                   type="button"
-                  className="primary"
-                  onClick={() => auth0.loginWithRedirect()}
+                  className="ghost"
+                  onClick={() =>
+                    auth0.logout({
+                      logoutParams: { returnTo: window.location.origin },
+                    })
+                  }
                 >
-                  Sign in
+                  Sign out
                 </button>
-              )}
-            </div>
-          ) : null}
+              </>
+            ) : (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => auth0.loginWithRedirect()}
+              >
+                Sign in
+              </button>
+            )}
+          </div>
         </div>
         <div className="hero-card">
           <div className="stat">
@@ -243,7 +245,11 @@ function App() {
           {error && <div className="error">{error}</div>}
 
           <div className="actions">
-            <button type="submit" className="primary" disabled={loading}>
+            <button
+              type="submit"
+              className="primary"
+              disabled={loading}
+            >
               {loading ? 'Running review…' : 'Run Review'}
             </button>
             <button
@@ -318,4 +324,29 @@ function App() {
   )
 }
 
-export default App
+function AppPublic() {
+  return (
+    <div className="page">
+      <header className="hero">
+        <div>
+          <p className="eyebrow">UAR Copilot</p>
+          <h1>UAR Copilot – Automated Access Risk Detection</h1>
+          <p className="subhead">
+            Authentication is not configured for this deployment. Set Vercel
+            environment variables (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID,
+            VITE_AUTH0_AUDIENCE) and redeploy.
+          </p>
+        </div>
+      </header>
+      <footer className="footer">
+        <span>UAR Copilot • Internal Audit Preview</span>
+        <span>Backend: Connected</span>
+      </footer>
+      <Analytics />
+    </div>
+  )
+}
+
+export default function App() {
+  return authEnabled ? <AppAuthed /> : <AppPublic />
+}
