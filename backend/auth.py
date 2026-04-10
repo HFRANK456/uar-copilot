@@ -35,10 +35,17 @@ def _normalize_domain(domain: str) -> str:
 
 @lru_cache(maxsize=1)
 def get_auth0_settings() -> Auth0Settings:
-    domain = os.getenv("AUTH0_DOMAIN", "").strip()
-    audience = os.getenv("AUTH0_AUDIENCE", "").strip()
-    issuer = os.getenv("AUTH0_ISSUER", "").strip()
-    required = os.getenv("AUTH_REQUIRED", "false").strip().lower() in {
+    # Accept common env var typos ("AUTHO_*" using letter O) to reduce deploy friction.
+    domain = (os.getenv("AUTH0_DOMAIN") or os.getenv("AUTHO_DOMAIN") or "").strip()
+    audience = (os.getenv("AUTH0_AUDIENCE") or os.getenv("AUTHO_AUDIENCE") or "").strip()
+    issuer = (os.getenv("AUTH0_ISSUER") or os.getenv("AUTHO_ISSUER") or "").strip()
+    required_raw = (
+        os.getenv("AUTH_REQUIRED")
+        or os.getenv("AUTH0_REQUIRED")
+        or os.getenv("AUTHO_REQUIRED")
+        or "false"
+    )
+    required = required_raw.strip().lower() in {
         "1",
         "true",
         "yes",
@@ -161,4 +168,3 @@ def require_auth(
         return {}
 
     return verify_auth0_token(creds.credentials, settings)
-
