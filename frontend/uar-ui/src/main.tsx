@@ -8,15 +8,10 @@ const defaultDomain = 'dev-pzmiocjfeo5mjqn2.us.auth0.com'
 const defaultClientId = '1BZScmvum58uuFuMiegEMvsNMyj94754'
 const defaultAudience = 'https://uar-copilot-api'
 
-const auth0Domain =
-  (import.meta.env.VITE_AUTH0_DOMAIN as string | undefined)?.trim() ||
-  defaultDomain
-const auth0ClientId =
-  (import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined)?.trim() ||
-  defaultClientId
-const auth0Audience =
-  (import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined)?.trim() ||
-  defaultAudience
+// Force known-good Auth0 values to avoid broken deploy env config.
+const auth0Domain = defaultDomain
+const auth0ClientId = defaultClientId
+const auth0Audience = defaultAudience
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
