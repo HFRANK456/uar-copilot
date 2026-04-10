@@ -29,6 +29,10 @@ type UploadResponse = {
   findings: Finding[]
 }
 
+const authEnabled = Boolean(
+  (import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined)?.trim()
+)
+
 const authAudience =
   (import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined)?.trim() ||
   'https://uar-copilot-api'
@@ -325,5 +329,27 @@ function AppAuthed() {
 }
 
 export default function App() {
+  if (authEnabled === false) {
+    return (
+      <div className="page">
+        <header className="hero">
+          <div>
+            <p className="eyebrow">UAR Copilot</p>
+            <h1>UAR Copilot – Automated Access Risk Detection</h1>
+            <p className="subhead">
+              Authentication is not configured. Set
+              {' `VITE_AUTH0_CLIENT_ID` '}in Vercel and redeploy.
+            </p>
+          </div>
+        </header>
+        <footer className="footer">
+          <span>UAR Copilot • Internal Audit Preview</span>
+          <span>Backend: Connected</span>
+        </footer>
+        <Analytics />
+      </div>
+    )
+  }
+
   return <AppAuthed />
 }

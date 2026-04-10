@@ -5,27 +5,36 @@ import './index.css'
 import App from './App.tsx'
 
 const defaultDomain = 'dev-pzmiocjfeo5mjqn2.us.auth0.com'
-const defaultClientId = '1BZScmvum58uuFuMiegEMvsNMyj94754'
 const defaultAudience = 'https://uar-copilot-api'
 
-// Force known-good Auth0 values to avoid broken deploy env config.
-const auth0Domain = defaultDomain
-const auth0ClientId = defaultClientId
-const auth0Audience = defaultAudience
+// Domain and audience can safely default.
+const auth0Domain =
+  (import.meta.env.VITE_AUTH0_DOMAIN as string | undefined)?.trim() ||
+  defaultDomain
+const auth0Audience =
+  (import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined)?.trim() ||
+  defaultAudience
+// Client ID must come from the tenant you're actually using.
+const auth0ClientId =
+  (import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined)?.trim() || ''
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Auth0Provider
-      domain={auth0Domain}
-      clientId={auth0ClientId}
-      authorizationParams={{
-        redirect_uri: window.location.origin,
-        audience: auth0Audience,
-      }}
-      cacheLocation="localstorage"
-      useRefreshTokens
-    >
+    {auth0ClientId ? (
+      <Auth0Provider
+        domain={auth0Domain}
+        clientId={auth0ClientId}
+        authorizationParams={{
+          redirect_uri: window.location.origin,
+          audience: auth0Audience,
+        }}
+        cacheLocation="localstorage"
+        useRefreshTokens
+      >
+        <App />
+      </Auth0Provider>
+    ) : (
       <App />
-    </Auth0Provider>
+    )}
   </StrictMode>,
 )
