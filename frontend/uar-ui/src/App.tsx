@@ -29,9 +29,9 @@ type UploadResponse = {
   findings: Finding[]
 }
 
-const authEnabled = Boolean(
-  import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID
-)
+const authAudience =
+  (import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined)?.trim() ||
+  'https://uar-copilot-api'
 
 function prettifyIssue(issueType: string, explanation: string) {
   const roleMatch = /role='([^']+)'/i.exec(explanation)
@@ -105,7 +105,7 @@ function AppAuthed() {
       setLoading(true)
       const token = await auth0.getAccessTokenSilently({
         authorizationParams: {
-          audience: import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined,
+          audience: authAudience,
         },
       })
       const res = await fetch(API_URL, {
@@ -324,29 +324,6 @@ function AppAuthed() {
   )
 }
 
-function AppPublic() {
-  return (
-    <div className="page">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">UAR Copilot</p>
-          <h1>UAR Copilot – Automated Access Risk Detection</h1>
-          <p className="subhead">
-            Authentication is not configured for this deployment. Set Vercel
-            environment variables (VITE_AUTH0_DOMAIN, VITE_AUTH0_CLIENT_ID,
-            VITE_AUTH0_AUDIENCE) and redeploy.
-          </p>
-        </div>
-      </header>
-      <footer className="footer">
-        <span>UAR Copilot • Internal Audit Preview</span>
-        <span>Backend: Connected</span>
-      </footer>
-      <Analytics />
-    </div>
-  )
-}
-
 export default function App() {
-  return authEnabled ? <AppAuthed /> : <AppPublic />
+  return <AppAuthed />
 }
