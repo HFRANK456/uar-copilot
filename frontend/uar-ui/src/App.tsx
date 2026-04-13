@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
-import { useAuth0 } from '@auth0/auth0-react'
 import './App.css'
 
 const API_URL = 'https://uar-copilot.onrender.com/upload'
@@ -28,14 +27,6 @@ type UploadResponse = {
   summary: UploadSummary
   findings: Finding[]
 }
-
-const authEnabled = Boolean(
-  (import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined)?.trim()
-)
-
-const authAudience =
-  (import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined)?.trim() ||
-  'https://uar-copilot-api'
 
 function prettifyIssue(issueType: string, explanation: string) {
   const roleMatch = /role='([^']+)'/i.exec(explanation)
@@ -70,8 +61,7 @@ function prettifyIssue(issueType: string, explanation: string) {
   }
 }
 
-function AppAuthed() {
-  const auth0 = useAuth0()
+function AppMain() {
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
@@ -91,11 +81,6 @@ function AppAuthed() {
     e.preventDefault()
     setError(null)
 
-    if (auth0.isAuthenticated === false) {
-      await auth0.loginWithRedirect()
-      return
-    }
-
     if (userFile === null || terminationFile === null) {
       setError('Please attach both CSV files before running the review.')
       return
@@ -107,15 +92,9 @@ function AppAuthed() {
 
     try {
       setLoading(true)
-      const token = await auth0.getAccessTokenSilently({
-        authorizationParams: {
-          audience: authAudience,
-        },
-      })
       const res = await fetch(API_URL, {
         method: 'POST',
         body: formData,
-        headers: { Authorization: `Bearer ${token}` },
       })
       if (res.ok === false) {
         const text = await res.text()
@@ -159,34 +138,6 @@ function AppAuthed() {
             Upload access and termination files to generate an audit-grade risk
             summary with prioritized findings.
           </p>
-          <div className="auth">
-            {auth0.isAuthenticated ? (
-              <>
-                <span className="auth-label">
-                  Signed in{auth0.user?.email ? ` as ${auth0.user.email}` : ''}
-                </span>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() =>
-                    auth0.logout({
-                      logoutParams: { returnTo: window.location.origin },
-                    })
-                  }
-                >
-                  Sign out
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="primary"
-                onClick={() => auth0.loginWithRedirect()}
-              >
-                Sign in
-              </button>
-            )}
-          </div>
         </div>
         <div className="hero-card">
           <div className="stat">
@@ -329,27 +280,5 @@ function AppAuthed() {
 }
 
 export default function App() {
-  if (authEnabled === false) {
-    return (
-      <div className="page">
-        <header className="hero">
-          <div>
-            <p className="eyebrow">UAR Copilot</p>
-            <h1>UAR Copilot – Automated Access Risk Detection</h1>
-            <p className="subhead">
-              Authentication is not configured. Set
-              {' `VITE_AUTH0_CLIENT_ID` '}in Vercel and redeploy.
-            </p>
-          </div>
-        </header>
-        <footer className="footer">
-          <span>UAR Copilot • Internal Audit Preview</span>
-          <span>Backend: Connected</span>
-        </footer>
-        <Analytics />
-      </div>
-    )
-  }
-
-  return <AppAuthed />
+  return <AppMain />
 }
