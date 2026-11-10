@@ -1,0 +1,8 @@
+UserName,Email Address,Account Status,Permission Set,Last Sign In
+priya.shah,priya.shah@acme.io,Enabled,AdministratorAccess,2026-11-08
+marcus.lee,marcus.lee@acme.io,Enabled,PowerUserAccess,2026-11-09
+marcus.lee,marcus.lee@acme.io,Enabled,ReadOnlyAccess,2026-11-09
+jordan.kim,jordan.kim@acme.io,Enabled,AdministratorAccess,2026-10-20
+svc-deploy,,Enabled,DeployRole,2026-11-10
+alex.chen,alex.chen@acme.io,Disabled,BillingReadOnly,2026-11-07
+contractor.ext,j.doe@vendor.example,Enabled,ReadOnlyAccess,2026-06-01

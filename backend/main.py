@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Allow `uvicorn main:app` from inside backend/ as well as `uvicorn backend.main:app` from the root.
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from backend.api.campaigns import router as campaigns_router  # noqa: E402
 from backend.auth import auth_disabled, require_auth  # noqa: E402
 from backend.rule_registry import RULE_SET_VERSION  # noqa: E402
 from backend.rules import aggregate_results, compute_flags, evaluate_rules, merge_data  # noqa: E402
@@ -46,6 +47,8 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+app.include_router(campaigns_router)
 
 if auth_disabled():
     logger.warning("auth_disabled", extra={"note": "AUTH_DISABLED is set; never use in a deployed environment"})

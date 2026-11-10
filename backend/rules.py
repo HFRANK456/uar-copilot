@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import difflib
 import logging
 import os
 import re
@@ -9,6 +8,7 @@ from typing import Any, Iterable, List, Mapping, Optional
 import numpy as np
 import pandas as pd
 
+from backend.mapping import find_best_column, map_columns  # noqa: F401 (re-exported)
 from backend.privileged_access_catalog import classify_privileged_access
 from backend.rule_registry import RULES
 from backend.utils import require_columns
@@ -17,7 +17,6 @@ from schemas.user_schema import ColumnMapping, Finding, Issue
 logger = logging.getLogger(__name__)
 
 SEVERITY_PRIORITY = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-MAPPING_CONFIDENCE_THRESHOLD = 0.85
 
 COLUMN_ALIASES: dict[str, list[str]] = {
     "user_id": ["user_id", "uid", "id", "employee_id", "user"],
@@ -42,68 +41,13 @@ def termination_grace_business_days() -> int:
 # --------------------------------------------------------------------------
 
 
-def find_best_column(columns, target, aliases, threshold=0.75):
-    """Return (column, confidence, method) for the best match, or (None, 0.0, 'none')."""
-    columns = list(columns)
-
-    if target in columns:
-        return target, 1.0, "exact"
-
-    for col in columns:
-        if col in aliases:
-            return col, 0.99, "alias"
-
-    best_match = None
-    best_score = 0.0
-    for col in columns:
-        for alias in [target] + aliases:
-            score = difflib.SequenceMatcher(None, col, alias).ratio()
-            if score > best_score:
-                best_score = score
-                best_match = col
-
-    if best_score >= threshold:
-        return best_match, best_score, "fuzzy"
-
-    return None, 0.0, "none"
-
-
 def normalize_columns(
     df: pd.DataFrame,
     source: str = "input",
     mapping_log: Optional[List[ColumnMapping]] = None,
 ) -> pd.DataFrame:
     """Rename messy export headers to canonical names and record every decision."""
-    normalized = df.copy()
-    normalized.columns = [str(c).strip().lower() for c in normalized.columns]
-
-    rename_map: dict[str, str] = {}
-    for target, aliases in COLUMN_ALIASES.items():
-        match, score, method = find_best_column(normalized.columns, target, aliases)
-        # Don't let one source column satisfy two targets.
-        if match is not None and match in rename_map:
-            match, score, method = None, 0.0, "none"
-        if match and match != target:
-            rename_map[match] = target
-
-        entry = ColumnMapping(
-            source=source,
-            target=target,
-            matched_column=match,
-            confidence=round(float(score), 2),
-            method=method,
-            needs_confirmation=match is not None and score < MAPPING_CONFIDENCE_THRESHOLD,
-        )
-        if entry.needs_confirmation:
-            logger.warning(
-                "weak_column_match",
-                extra={"source": source, "target": target, "column": match, "confidence": entry.confidence},
-            )
-        if mapping_log is not None:
-            mapping_log.append(entry)
-
-    normalized = normalized.rename(columns=rename_map)
-    logger.info("column_mapping_applied", extra={"source": source, "rename_map": rename_map})
+    normalized = map_columns(df, COLUMN_ALIASES, source, mapping_log)
 
     if "user_id" not in normalized.columns:
         require_columns(normalized, ["user_id"], source)
