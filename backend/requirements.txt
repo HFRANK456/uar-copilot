@@ -1,5 +1,7 @@
-fastapi
-uvicorn
-pandas
-python-multipart
-python-jose[cryptography]
+fastapi==0.162.4
+uvicorn==0.54.0
+pandas==3.0.5
+numpy>=2.0,<3
+python-multipart==0.0.32
+python-jose[cryptography]==3.5.0
+pydantic==2.13.5
