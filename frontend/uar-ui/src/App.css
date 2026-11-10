@@ -343,3 +343,57 @@ button.ghost {
     gap: 6px;
   }
 }
+
+.severity.critical {
+  background: #7f1d1d;
+  color: #ffffff;
+}
+
+.auth-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.mappings {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.mappings h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.mapping-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1.4fr;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f8f6f1;
+  overflow-wrap: anywhere;
+}
+
+.mapping-row.weak {
+  background: #fff3e6;
+  color: var(--warning);
+}
+
+.digests {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

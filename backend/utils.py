@@ -1,18 +1,27 @@
 from __future__ import annotations
 
-from typing import Iterable
+import hashlib
+import io
+from typing import Iterable, Tuple
 
 import pandas as pd
 from fastapi import HTTPException, UploadFile
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
-def read_csv_uploadfile(upload: UploadFile) -> pd.DataFrame:
+
+def read_csv_uploadfile(upload: UploadFile) -> Tuple[pd.DataFrame, str]:
+    """Parse an uploaded CSV and return it with the SHA-256 of the raw bytes."""
+    raw = upload.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large: {upload.filename}")
+    digest = hashlib.sha256(raw).hexdigest()
     try:
-        df = pd.read_csv(upload.file)
-    except Exception as exc:  # pragma: no cover - defensive
+        df = pd.read_csv(io.BytesIO(raw))
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid CSV file: {upload.filename}") from exc
     df.columns = [str(c).strip().lower() for c in df.columns]
-    return df
+    return df, digest
 
 
 def require_columns(df: pd.DataFrame, columns: Iterable[str], label: str) -> None:
@@ -22,17 +31,3 @@ def require_columns(df: pd.DataFrame, columns: Iterable[str], label: str) -> Non
             status_code=400,
             detail=f"Missing columns in {label}: {', '.join(missing)}",
         )
-
-
-def is_active(value: object) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip().lower()
-    return text in {"active", "enabled", "true", "1", "yes"}
-
-
-def is_admin_role(role: object) -> bool:
-    if role is None:
-        return False
-    text = str(role).strip().lower()
-    return "admin" in text

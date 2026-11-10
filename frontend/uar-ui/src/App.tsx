@@ -1,32 +1,66 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
+import { useAuth0 } from '@auth0/auth0-react'
 import './App.css'
+import { API_BASE_URL, authEnabled } from './config'
 
-const API_URL = 'https://uar-copilot.onrender.com/upload'
+const API_URL = `${API_BASE_URL}/upload`
+
+type Severity = 'critical' | 'high' | 'medium' | 'low' | string
 
 type Issue = {
   type: string
-  severity: 'high' | 'medium' | 'low' | string
+  severity: Severity
   explanation: string
+  rule_version?: number
+  control_refs?: string[]
 }
 
 type Finding = {
   user_id: string
-  severity: 'high' | 'medium' | 'low' | string
+  severity: Severity
   issues: Issue[]
 }
 
 type UploadSummary = {
+  critical: number
   high: number
   medium: number
   low: number
   total: number
 }
 
+type ColumnMapping = {
+  source: string
+  target: string
+  matched_column: string | null
+  confidence: number
+  method: 'exact' | 'alias' | 'fuzzy' | 'none' | string
+  needs_confirmation: boolean
+}
+
+type InputDigest = {
+  source: string
+  filename: string | null
+  sha256: string
+  row_count: number
+}
+
 type UploadResponse = {
   summary: UploadSummary
   findings: Finding[]
+  column_mappings: ColumnMapping[]
+  inputs: InputDigest[]
+  rule_set_version: string | null
+  evaluated_at: string | null
 }
+
+const PRIVILEGE_TITLES: Record<string, string> = {
+  privileged_access_critical: 'Critical-Tier Privileged Access',
+  privileged_access_high: 'High-Tier Privileged Access',
+  privileged_access_medium: 'Sensitive Access',
+}
+
 
 function prettifyIssue(issueType: string, explanation: string) {
   const roleMatch = /role='([^']+)'/i.exec(explanation)
@@ -36,9 +70,32 @@ function prettifyIssue(issueType: string, explanation: string) {
   const status = statusMatch?.[1]
   const terminationDate = termMatch?.[1]
 
+  if (issueType in PRIVILEGE_TITLES) {
+    return {
+      title: PRIVILEGE_TITLES[issueType],
+      summary: role
+        ? `Role "${role}" matches the privileged access catalog. Confirm it is still required and approved.`
+        : 'Role matches the privileged access catalog. Confirm it is still required and approved.',
+    }
+  }
+
+  if (issueType === 'terminated_privileged_active') {
+    return {
+      title: 'Terminated User Holds Privileged Access',
+      summary: `Terminated user is still active with privileged role${role ? ` "${role}"` : ''}. Revoke immediately.${terminationDate ? ` Termination date: ${terminationDate}.` : ''}`,
+    }
+  }
+
+  if (issueType === 'terminated_active_within_grace') {
+    return {
+      title: 'Recently Terminated, Still Active',
+      summary: `User was terminated${terminationDate ? ` on ${terminationDate}` : ''} and is still active, but is within the deprovisioning grace period. Confirm removal is in progress.`,
+    }
+  }
+
   if (issueType === 'admin_role') {
     return {
-      title: 'Administrative Access Detected',
+      title: 'Uncatalogued Administrative Role',
       summary: role
         ? `User holds an administrative role (${role}). This access should be explicitly approved and periodically reviewed.`
         : 'User holds an administrative role. This access should be explicitly approved and periodically reviewed.',
@@ -62,10 +119,12 @@ function prettifyIssue(issueType: string, explanation: string) {
 }
 
 function AppMain() {
+  const { isAuthenticated, isLoading: authLoading, loginWithRedirect, logout, getAccessTokenSilently, user } = useAuth0()
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
   const [summary, setSummary] = useState<UploadSummary>({
+    critical: 0,
     high: 0,
     medium: 0,
     low: 0,
@@ -74,6 +133,9 @@ function AppMain() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
+  const [mappings, setMappings] = useState<ColumnMapping[]>([])
+  const [inputs, setInputs] = useState<InputDigest[]>([])
+  const [ruleSetVersion, setRuleSetVersion] = useState<string | null>(null)
 
   const hasFindings = useMemo(() => results.length > 0, [results])
 
@@ -90,10 +152,20 @@ function AppMain() {
     formData.append('user_access', userFile)
     formData.append('termination', terminationFile)
 
+    if (authEnabled && !isAuthenticated) {
+      setError('Please sign in before running the review.')
+      return
+    }
+
     try {
       setLoading(true)
+      const headers: Record<string, string> = {}
+      if (authEnabled) {
+        headers.Authorization = `Bearer ${await getAccessTokenSilently()}`
+      }
       const res = await fetch(API_URL, {
         method: 'POST',
+        headers,
         body: formData,
       })
       if (res.ok === false) {
@@ -103,6 +175,9 @@ function AppMain() {
       const data = (await res.json()) as UploadResponse
       setResults(data.findings)
       setSummary(data.summary)
+      setMappings(data.column_mappings ?? [])
+      setInputs(data.inputs ?? [])
+      setRuleSetVersion(data.rule_set_version)
       setLastRunAt(new Date().toLocaleString())
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unexpected error'
@@ -117,7 +192,15 @@ function AppMain() {
   }
 
   function downloadJson() {
-    const blob = new Blob([JSON.stringify(results, null, 2)], {
+    const report = {
+      rule_set_version: ruleSetVersion,
+      evaluated_at: lastRunAt,
+      inputs,
+      column_mappings: mappings,
+      summary,
+      findings: results,
+    }
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
       type: 'application/json',
     })
     const url = URL.createObjectURL(blob)
@@ -138,8 +221,34 @@ function AppMain() {
             Upload access and termination files to generate an audit-grade risk
             summary with prioritized findings.
           </p>
+          {authEnabled && (
+            <div className="auth-row">
+              {authLoading ? (
+                <span className="auth-label">Checking session…</span>
+              ) : isAuthenticated ? (
+                <>
+                  <span className="auth-label">Signed in as {user?.email ?? user?.name}</span>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="primary" onClick={() => loginWithRedirect()}>
+                  Sign in
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="hero-card">
+          <div className="stat">
+            <span className="label">Critical</span>
+            <span className="value danger">{summary.critical}</span>
+          </div>
           <div className="stat">
             <span className="label">High</span>
             <span className="value danger">{summary.high}</span>
@@ -168,7 +277,8 @@ function AppMain() {
           </div>
           <p className="panel-text">
             Provide both files. The system flags terminated users who remain
-            active and users with administrative roles.
+            active and users holding privileged access, tiered by the
+            privileged access catalog.
           </p>
 
           <label className="file-field">
@@ -216,6 +326,45 @@ function AppMain() {
               Download JSON
             </button>
           </div>
+
+          {mappings.length > 0 && (
+            <div className="mappings">
+              <h3>Column mapping</h3>
+              <p className="panel-text">
+                How your file headers were interpreted. Review any row marked
+                for confirmation before relying on the results.
+              </p>
+              <div className="mapping-table">
+                {mappings
+                  .filter((m) => m.method !== 'none' || m.target === 'user_id')
+                  .map((m) => (
+                    <div
+                      key={m.source + m.target}
+                      className={'mapping-row' + (m.needs_confirmation ? ' weak' : '')}
+                    >
+                      <span>{m.source}</span>
+                      <span>
+                        {m.matched_column ?? '—'} → <strong>{m.target}</strong>
+                      </span>
+                      <span>
+                        {m.method} · {Math.round(m.confidence * 100)}%
+                        {m.needs_confirmation ? ' · confirm' : ''}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+              {inputs.length > 0 && (
+                <ul className="digests">
+                  {inputs.map((i) => (
+                    <li key={i.source}>
+                      {i.filename ?? i.source}: {i.row_count} rows · sha256{' '}
+                      <code title={i.sha256}>{i.sha256.slice(0, 12)}…</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </form>
 
         <section className="panel results">
@@ -272,7 +421,7 @@ function AppMain() {
 
       <footer className="footer">
         <span>UAR Copilot • Internal Audit Preview</span>
-        <span>Backend: Connected</span>
+        <span>{ruleSetVersion ? `Rule set ${ruleSetVersion}` : `API: ${API_BASE_URL}`}</span>
       </footer>
       <Analytics />
     </div>

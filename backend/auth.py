@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import urllib.request
@@ -13,11 +14,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt
 from jose.exceptions import JWTError
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class Auth0Settings:
     enabled: bool
-    required: bool
     domain: str
     audience: str
     issuer: str
@@ -39,17 +41,6 @@ def get_auth0_settings() -> Auth0Settings:
     domain = (os.getenv("AUTH0_DOMAIN") or os.getenv("AUTHO_DOMAIN") or "").strip()
     audience = (os.getenv("AUTH0_AUDIENCE") or os.getenv("AUTHO_AUDIENCE") or "").strip()
     issuer = (os.getenv("AUTH0_ISSUER") or os.getenv("AUTHO_ISSUER") or "").strip()
-    required_raw = (
-        os.getenv("AUTH_REQUIRED")
-        or os.getenv("AUTH0_REQUIRED")
-        or os.getenv("AUTHO_REQUIRED")
-        or "false"
-    )
-    required = required_raw.strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
     algorithms_env = os.getenv("AUTH0_ALGORITHMS", "RS256").strip()
     algorithms = tuple(a.strip() for a in algorithms_env.split(",") if a.strip())
 
@@ -62,7 +53,6 @@ def get_auth0_settings() -> Auth0Settings:
 
     return Auth0Settings(
         enabled=enabled,
-        required=required,
         domain=domain,
         audience=audience,
         issuer=issuer,
@@ -147,33 +137,35 @@ def verify_auth0_token(token: str, settings: Auth0Settings) -> Dict[str, Any]:
         ) from exc
 
 
+def auth_disabled() -> bool:
+    """Explicit local-development opt-out. Never set this in a deployed environment."""
+    return os.getenv("AUTH_DISABLED", "false").strip().lower() in {"1", "true", "yes"}
+
+
 def require_auth(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> Dict[str, Any]:
-    settings = get_auth0_settings()
-    # Keep auth optional by default so the review pipeline is operable
-    # even while IdP configuration is being finalized.
-    strict_auth = os.getenv("AUTH_STRICT", "false").strip().lower() in {"1", "true", "yes"}
+    """Fail-closed bearer-token check.
 
+    Every protected route needs a valid Auth0 access token. The only way to skip
+    verification is the explicit AUTH_DISABLED=true flag for local development.
+    """
+    if auth_disabled():
+        return {"sub": "local-dev", "auth_disabled": True}
+
+    settings = get_auth0_settings()
     if not settings.enabled:
-        if strict_auth and settings.required:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Auth is required but AUTH0 settings are not configured.",
-            )
-        return {}
+        logger.error("auth_not_configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is not configured on the server.",
+        )
 
     if creds is None or not creds.credentials:
-        if strict_auth and settings.required:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Missing bearer token.",
-            )
-        return {}
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    try:
-        return verify_auth0_token(creds.credentials, settings)
-    except HTTPException:
-        if strict_auth and settings.required:
-            raise
-        return {}
+    return verify_auth0_token(creds.credentials, settings)
