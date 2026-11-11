@@ -286,6 +286,8 @@ class ReviewItem(TenantOwned, Base):
     recommendation: Mapped[Optional[ReviewAction]] = mapped_column(_enum(ReviewAction, "review_action"))
     rationale: Mapped[Optional[str]] = mapped_column(Text)
     finding_ids: Mapped[Any] = mapped_column(JsonType, default=list)
+    # Highest severity among this item's findings, or "none"; drives queue order and bulk rules.
+    severity: Mapped[str] = mapped_column(String(20), default="none", server_default="none", index=True)
     status: Mapped[str] = mapped_column(String(50), default="pending")
 
 

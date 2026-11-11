@@ -38,6 +38,8 @@ Privileged roles are tiered by `backend/privileged_access_catalog.py`.
 | `terminated_active_within_grace` | medium |
 | `privileged_access_high` | medium |
 | `privileged_access_medium` | low |
+| `external_account_active` (campaigns) | medium |
+| `dormant_account` (no login in 90+ days, campaigns) | low |
 | `admin_role` (looks admin, not in catalog) | low |
 
 Every issue carries `rule_version`, the `inputs` that triggered it, a `row_ref` and SOC 2 `control_refs`,

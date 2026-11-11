@@ -369,3 +369,111 @@ def test_api_people_list(api):
     people = api.get(f"/campaigns/{cid}/people").json()
     assert len(people) == 6 and people[0]["name"] == "Alex Chen"
     assert api.get(f"/campaigns/{uuid.uuid4()}/people").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Analysis and review items
+# ---------------------------------------------------------------------------
+
+
+def _resolved_campaign(api):
+    cid = _ingested_campaign(api)
+    items = api.post(f"/campaigns/{cid}/identities/resolve").json()["items"]
+    for item in items:
+        if item["status"] == "ambiguous":
+            api.post(f"/campaigns/{cid}/identities/{item['account_id']}",
+                     json={"person_id": item["candidates"][0]["person"]["id"]})
+        elif item["status"] == "unmatched":
+            api.post(f"/campaigns/{cid}/identities/{item['account_id']}", json={"account_type": "external"})
+    return cid
+
+
+def test_analysis_requires_resolved_identities(api):
+    cid = _ingested_campaign(api)
+    assert api.post(f"/campaigns/{cid}/analyze").status_code == 409  # still ingesting
+    api.post(f"/campaigns/{cid}/identities/resolve")
+    r = api.post(f"/campaigns/{cid}/analyze")
+    assert r.status_code == 409 and "identity decision" in r.json()["detail"]
+
+
+def test_analysis_creates_findings_and_review_items(api):
+    cid = _resolved_campaign(api)
+    r = api.post(f"/campaigns/{cid}/analyze")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    items = {(i["application"], i["native_id"], i["entitlement"]): i for i in body["items"]}
+
+    # One review item per grant; accounts without a role get "Account access".
+    assert body["summary"]["review_items"] == 12 == len(body["items"])
+    assert ("GitHub", "ghost-user", "write") in items
+
+    # Terminated Jordan Kim still holds AWS admin: critical, with the terminated + privileged rules.
+    jordan = items[("AWS", "jordan.kim", "AdministratorAccess")]
+    assert jordan["severity"] == "critical"
+    rules = {f["rule_id"] for f in jordan["findings"]}
+    assert {"terminated_privileged_active", "terminated_active", "privileged_access_critical"} <= rules
+    assert jordan["person"]["name"] == "Jordan Kim" and jordan["reviewer"]["name"] == "Priya Shah"
+
+    # Alex Chen is terminated but the AWS account is disabled: no termination finding.
+    alex = items[("AWS", "alex.chen", "BillingReadOnly")]
+    assert not any(f["rule_id"].startswith("terminated") for f in alex["findings"])
+
+    # Priya holds AWS admin while employed: high, reviewed by her manager (the CEO).
+    priya = items[("AWS", "priya.shah", "AdministratorAccess")]
+    assert priya["severity"] == "high" and priya["reviewer"]["name"] == "Dana Reyes"
+
+    # The vendor contractor: external and dormant (last login 2026-06-01).
+    contractor = {f["rule_id"] for f in items[("AWS", "contractor.ext", "ReadOnlyAccess")]["findings"]}
+    assert {"external_account_active", "dormant_account"} <= contractor
+
+    # Nobody reviews their own access: the CEO has no manager, so her item is unassigned.
+    assert items[("GitHub", "dreyes", "owner")]["reviewer"] is None
+
+    # Account-level findings are stored once per account, not once per entitlement.
+    findings = api.get(f"/campaigns/{cid}/findings").json()
+    term = [f for f in findings if f["rule_id"] == "terminated_active"]
+    assert len(term) == 1 and term[0]["inputs"]["application"] == "AWS" and term[0]["rule_version"] >= 1
+
+    # Items are ordered most severe first; filtering works.
+    sev_order = [i["severity"] for i in body["items"]]
+    assert sev_order[0] == "critical" and sev_order[-1] == "none"
+    crit = api.get(f"/campaigns/{cid}/review-items?severity=critical").json()["items"]
+    assert [i["native_id"] for i in crit] == ["jordan.kim"]
+
+    assert api.get(f"/campaigns/{cid}").json()["state"] == "analyzing"
+    ev = api.get(f"/campaigns/{cid}/evidence").json()
+    assert ev["events"][-1]["type"] == "analysis.completed" and ev["verification"]["valid"]
+    assert ev["events"][-1]["payload"]["rule_set_version"] == body["summary"]["rule_set_version"]
+
+
+def test_analysis_rerun_replaces_previous(api):
+    cid = _resolved_campaign(api)
+    first = api.post(f"/campaigns/{cid}/analyze").json()["summary"]
+    second = api.post(f"/campaigns/{cid}/analyze").json()["summary"]
+    assert first == second
+    assert len(api.get(f"/campaigns/{cid}/review-items").json()["items"]) == first["review_items"]
+
+
+def test_reviewer_selection_rules():
+    import uuid as _u
+
+    from backend.db.models import Application, Campaign, Person
+    from backend.domain.analysis import _pick_reviewer
+
+    ceo = Person(id=_u.uuid4(), name="CEO")
+    vp = Person(id=_u.uuid4(), name="VP", manager_id=ceo.id)
+    eng = Person(id=_u.uuid4(), name="Eng", manager_id=vp.id)
+    owner = Person(id=_u.uuid4(), name="Owner")
+    people = {p.id: p for p in (ceo, vp, eng, owner)}
+    app = Application(name="AWS", owner_person_id=owner.id)
+    no_owner = Application(name="X", owner_person_id=None)
+    by_manager = Campaign(reviewer_rule="manager")
+    by_owner = Campaign(reviewer_rule="app_owner")
+
+    assert _pick_reviewer(by_manager, eng, app, people) == (vp.id, "manager")
+    assert _pick_reviewer(by_owner, eng, app, people) == (owner.id, "app_owner")
+    assert _pick_reviewer(by_manager, ceo, app, people) == (owner.id, "app_owner")
+    assert _pick_reviewer(by_manager, ceo, no_owner, people) == (None, "unassigned")
+    assert _pick_reviewer(by_manager, None, app, people) == (owner.id, "app_owner")
+    # The app owner never reviews their own account.
+    assert _pick_reviewer(by_owner, owner, app, people)[0] != owner.id

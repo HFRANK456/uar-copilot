@@ -18,7 +18,10 @@ it is not by itself a violation. `critical` is reserved for terminated users who
 still hold active privileged access.
 """
 
-RULE_SET_VERSION = "2026.11.1"
+RULE_SET_VERSION = "2026.11.2"
+
+# Accounts with no login in this many days count as dormant.
+DORMANT_DAYS = 90
 
 RULES = [
     {
@@ -89,6 +92,30 @@ RULES = [
         ],
         "severity": "low",
         "control_refs": ["CC6.3"],
+    },
+    {
+        "id": "external_account_active",
+        "version": 1,
+        "description": "Active account belongs to someone outside the company (not on the HR roster)",
+        "conditions": [
+            {"field": "is_active", "operator": "==", "value": True},
+            {"field": "account_type", "operator": "==", "value": "external"},
+        ],
+        "severity": "medium",
+        "control_refs": ["CC6.2", "CC6.3"],
+        "scope": "account",
+    },
+    {
+        "id": "dormant_account",
+        "version": 1,
+        "description": f"Active account with no login in more than {DORMANT_DAYS} days",
+        "conditions": [
+            {"field": "is_active", "operator": "==", "value": True},
+            {"field": "last_login_at", "operator": "days_since", "value": {"op": ">", "days": DORMANT_DAYS}},
+        ],
+        "severity": "low",
+        "control_refs": ["CC6.2"],
+        "scope": "account",
     },
     {
         "id": "admin_role",

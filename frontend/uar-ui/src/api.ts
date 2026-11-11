@@ -143,3 +143,43 @@ export type Evidence = {
   verification: { valid: boolean; events: number; head_hash?: string; broken_at_seq?: number }
   events: EvidenceEvent[]
 }
+
+export type Finding = {
+  id: string
+  rule_id: string
+  rule_version: number
+  severity: string
+  account_id: string | null
+  inputs: Record<string, unknown>
+  explanation: string
+}
+
+export type ReviewItem = {
+  id: string
+  severity: string
+  status: string
+  application: string
+  entitlement: string
+  privilege_tier: string | null
+  account_id: string
+  native_id: string
+  account_type: string
+  account_status: string | null
+  last_login_at: string | null
+  person: PersonRef | null
+  reviewer: PersonRef | null
+  recommendation: string | null
+  findings: Finding[]
+}
+
+export type Analysis = {
+  summary: {
+    review_items: number
+    items_by_severity: Record<string, number>
+    findings: number
+    findings_by_severity: Record<string, number>
+    unassigned: number
+    rule_set_version: string | null
+  } | null
+  items: ReviewItem[]
+}

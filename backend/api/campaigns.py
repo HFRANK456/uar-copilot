@@ -9,14 +9,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.auth import require_auth
-from backend.db.models import AccountType, Application, Campaign, EvidenceEvent, IdentityLink, Person, SourceSnapshot
+from backend.db.models import (
+    Account,
+    AccountEntitlement,
+    AccountType,
+    Application,
+    Campaign,
+    Entitlement,
+    EvidenceEvent,
+    Finding,
+    IdentityLink,
+    Person,
+    ReviewItem,
+    SourceSnapshot,
+)
 from backend.db.session import get_engine, tenant_session
+from backend.domain import analysis as analysis_service
 from backend.domain import campaigns as campaign_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
 from backend.domain.evidence import verify_chain
 from backend.domain.tenants import resolve_tenant
 from schemas.user_schema import (
+    AnalysisOut,
+    FindingOut,
+    ReviewItemOut,
     CampaignCreate,
     CampaignOut,
     ColumnMapping,
@@ -305,3 +322,77 @@ def list_people(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     """People from the tenant's HR roster, for linking accounts by hand."""
     _load(ctx, campaign_id)
     return [_person_ref(p) for p in ctx.session.scalars(select(Person).order_by(Person.name))]
+
+
+# ---------------------------------------------------------------------------
+# Analysis and review items
+# ---------------------------------------------------------------------------
+
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
+
+
+def _finding_out(f: Finding) -> FindingOut:
+    return FindingOut(
+        id=f.id, rule_id=f.rule_id, rule_version=f.rule_version, severity=f.severity,
+        account_id=f.account_id, inputs=f.inputs or {}, explanation=f.explanation,
+    )
+
+
+def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None) -> AnalysisOut:
+    s = ctx.session
+    items = list(s.scalars(select(ReviewItem).where(ReviewItem.campaign_id == c.id)))
+    if severity:
+        items = [i for i in items if i.severity == severity]
+    grants = {g.id: g for g in s.scalars(select(AccountEntitlement).where(
+        AccountEntitlement.id.in_([i.account_entitlement_id for i in items])))}
+    accounts = {a.id: a for a in s.scalars(select(Account).where(Account.id.in_([g.account_id for g in grants.values()])))}
+    entitlements = {e.id: e for e in s.scalars(select(Entitlement))}
+    apps = {a.id: a.name for a in s.scalars(select(Application))}
+    people = {p.id: p for p in s.scalars(select(Person))}
+    links = {l.account_id: l for l in s.scalars(select(IdentityLink).where(IdentityLink.account_id.in_(list(accounts))))}
+    findings = {str(f.id): f for f in s.scalars(select(Finding).where(Finding.campaign_id == c.id))}
+
+    out = []
+    for i in items:
+        g = grants[i.account_entitlement_id]
+        a = accounts[g.account_id]
+        e = entitlements[g.entitlement_id]
+        link = links.get(a.id)
+        person = people.get(link.person_id) if link and link.person_id else None
+        reviewer = people.get(i.reviewer_id) if i.reviewer_id else None
+        item_findings = sorted((findings[fid] for fid in i.finding_ids or [] if fid in findings),
+                               key=lambda f: _SEVERITY_ORDER.get(f.severity, 9))
+        out.append(ReviewItemOut(
+            id=i.id, severity=i.severity, status=i.status, application=apps.get(a.application_id, ""),
+            entitlement=e.name, privilege_tier=e.privilege_tier, account_id=a.id, native_id=a.native_id,
+            account_type=a.account_type.value, account_status=a.status, last_login_at=a.last_login_at,
+            person=_person_ref(person) if person else None, reviewer=_person_ref(reviewer) if reviewer else None,
+            recommendation=i.recommendation.value if i.recommendation else None,
+            findings=[_finding_out(f) for f in item_findings],
+        ))
+    out.sort(key=lambda r: (_SEVERITY_ORDER.get(r.severity, 9), r.application, r.native_id, r.entitlement))
+    return AnalysisOut(summary=analysis_service.analysis_summary(s, c), items=out)
+
+
+@router.post("/{campaign_id}/analyze", response_model=AnalysisOut)
+def run_analysis(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    try:
+        analysis_service.analyze(ctx.session, c, ctx.actor)
+    except campaign_service.InvalidTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except analysis_service.NotReady as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return _analysis(ctx, c)
+
+
+@router.get("/{campaign_id}/review-items", response_model=AnalysisOut)
+def list_review_items(campaign_id: uuid.UUID, severity: str | None = None, ctx: Ctx = Depends(get_ctx)):
+    return _analysis(ctx, _load(ctx, campaign_id), severity)
+
+
+@router.get("/{campaign_id}/findings", response_model=List[FindingOut])
+def list_findings(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    rows = ctx.session.scalars(select(Finding).where(Finding.campaign_id == c.id))
+    return sorted((_finding_out(f) for f in rows), key=lambda f: (_SEVERITY_ORDER.get(f.severity, 9), f.rule_id))
