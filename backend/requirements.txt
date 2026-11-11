@@ -5,3 +5,7 @@ numpy>=2.0,<3
 python-multipart==0.0.32
 python-jose[cryptography]==3.5.0
 pydantic==2.13.5
+SQLAlchemy==2.0.57
+alembic==1.20.1
+psycopg[binary]==3.3.8
+openpyxl==3.1.5

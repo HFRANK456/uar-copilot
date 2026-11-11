@@ -52,3 +52,71 @@ class UploadResponse(BaseModel):
     inputs: List[InputDigest] = Field(default_factory=list)
     rule_set_version: Optional[str] = None
     evaluated_at: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Campaigns (Phase 1)
+# ---------------------------------------------------------------------------
+
+from datetime import date as _date, datetime as _datetime  # noqa: E402
+from uuid import UUID as _UUID  # noqa: E402
+
+
+class CampaignCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    period_start: Optional[_date] = None
+    period_end: Optional[_date] = None
+    due_date: Optional[_date] = None
+    reviewer_rule: str = Field(default="manager", pattern="^(manager|app_owner|named)$")
+
+
+class SnapshotOut(BaseModel):
+    id: _UUID
+    kind: str
+    application: Optional[str] = None
+    filename: Optional[str]
+    sha256: str
+    size_bytes: int
+    row_count: int
+    column_mapping: List[ColumnMapping]
+    needs_confirmation: bool
+    mapping_confirmed_by: Optional[str]
+    created_at: Optional[_datetime] = None
+
+
+class CampaignOut(BaseModel):
+    id: _UUID
+    name: str
+    state: str
+    period_start: Optional[_date]
+    period_end: Optional[_date]
+    due_date: Optional[_date]
+    reviewer_rule: str
+    rule_set_version: Optional[str]
+    created_by: Optional[str]
+    created_at: Optional[_datetime]
+    snapshots: List[SnapshotOut] = Field(default_factory=list)
+
+
+class IngestOut(BaseModel):
+    snapshot: SnapshotOut
+    counts: Dict[str, int]
+    warnings: List[str]
+    campaign_state: str
+
+
+class EvidenceEventOut(BaseModel):
+    seq: int
+    type: str
+    actor: str
+    actor_kind: str
+    occurred_at: _datetime
+    payload: Any
+    prev_hash: str
+    hash: str
+
+
+class EvidenceOut(BaseModel):
+    campaign_id: _UUID
+    verification: Dict[str, Any]
+    events: List[EvidenceEventOut]

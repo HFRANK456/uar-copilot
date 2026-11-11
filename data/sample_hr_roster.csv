@@ -1,0 +1,7 @@
+Emp ID,Full Name,Work Email,Manager Email,Dept,Job Title,Employment Status,Start Date,Term Date
+E100,Dana Reyes,dana.reyes@acme.io,,Executive,CEO,Active,2019-03-01,
+E101,Priya Shah,priya.shah@acme.io,dana.reyes@acme.io,Engineering,VP Engineering,Active,2020-01-15,
+E102,Marcus Lee,marcus.lee@acme.io,priya.shah@acme.io,Engineering,SRE,Active,2021-06-01,
+E103,Jordan Kim,jordan.kim@acme.io,priya.shah@acme.io,Engineering,Engineer,Terminated,2022-02-01,2026-10-03
+E104,Sam Ortiz,sam.ortiz@acme.io,dana.reyes@acme.io,Finance,Controller,Active,2021-09-13,
+E105,Alex Chen,alex.chen@acme.io,sam.ortiz@acme.io,Finance,Analyst,Terminated,2023-04-03,2026-11-09
