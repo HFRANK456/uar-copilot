@@ -170,6 +170,34 @@ export type ReviewItem = {
   reviewer: PersonRef | null
   recommendation: string | null
   findings: Finding[]
+  decision: Decision | null
+  is_mine: boolean
+  is_own_access: boolean
+}
+
+export type Decision = {
+  id: string
+  action: 'keep' | 'revoke' | 'modify'
+  justification: string | null
+  actor: string
+  decided_at: string
+  channel: string
+}
+
+export type ReviewProgress = {
+  total: number
+  decided: number
+  pending: number
+  high_risk_pending: number
+  by_action: Record<string, number>
+  unassigned: number
+  complete: boolean
+}
+
+export type Application = {
+  id: string
+  name: string
+  owner: PersonRef | null
 }
 
 export type Analysis = {
@@ -181,5 +209,6 @@ export type Analysis = {
     unassigned: number
     rule_set_version: string | null
   } | null
+  progress: ReviewProgress | null
   items: ReviewItem[]
 }
