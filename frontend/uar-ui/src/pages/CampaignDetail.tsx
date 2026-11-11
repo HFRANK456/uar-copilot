@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ApiError,
   useApi,
+  type Analysis,
+  type ReviewItem,
   type Campaign,
   type Evidence,
   type IdentityItem,
@@ -34,21 +36,24 @@ export default function CampaignDetailPage() {
   const [identities, setIdentities] = useState<IdentityList | null>(null)
   const [people, setPeople] = useState<PersonRef[]>([])
   const [evidence, setEvidence] = useState<Evidence | null>(null)
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      const [c, ids, ev, ppl] = await Promise.all([
+      const [c, ids, ev, ppl, an] = await Promise.all([
         api<Campaign>(`/campaigns/${id}`),
         api<IdentityList>(`/campaigns/${id}/identities`),
         api<Evidence>(`/campaigns/${id}/evidence`),
         api<PersonRef[]>(`/campaigns/${id}/people`),
+        api<Analysis>(`/campaigns/${id}/review-items`),
       ])
       setCampaign(c)
       setIdentities(ids)
       setEvidence(ev)
       setPeople(ppl)
+      setAnalysis(an)
       setError(null)
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) setNotFound(true)
@@ -104,7 +109,7 @@ export default function CampaignDetailPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} />
+      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} />
 
       <SourcesSection campaign={campaign} onChange={refresh} />
 
@@ -116,6 +121,8 @@ export default function CampaignDetailPage() {
         onChange={refresh}
       />
 
+      <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} onChange={refresh} />
+
       <EvidenceSection evidence={evidence} />
     </div>
   )
@@ -123,7 +130,17 @@ export default function CampaignDetailPage() {
 
 // ---------------------------------------------------------------------------
 
-function Steps({ hasHr, hasAccess, identities }: { hasHr: boolean; hasAccess: boolean; identities: IdentityList | null }) {
+function Steps({
+  hasHr,
+  hasAccess,
+  identities,
+  analyzed,
+}: {
+  hasHr: boolean
+  hasAccess: boolean
+  identities: IdentityList | null
+  analyzed: boolean
+}) {
   const resolved = (identities?.summary.accounts ?? 0) > 0 && (identities?.summary.not_resolved ?? 0) === 0
   const ready = Boolean(identities?.summary.ready_for_analysis)
   const steps = [
@@ -131,6 +148,7 @@ function Steps({ hasHr, hasAccess, identities }: { hasHr: boolean; hasAccess: bo
     { label: 'Upload access lists', done: hasAccess },
     { label: 'Match accounts to people', done: resolved },
     { label: 'Resolve the queue', done: ready },
+    { label: 'Run analysis', done: analyzed },
     { label: 'Review access', done: false, soon: true },
   ]
   return (
@@ -359,7 +377,11 @@ function IdentitySection({
           {busy ? 'Matching…' : resolvedOnce ? 'Re-run matching' : 'Match accounts to people'}
         </button>
         {!canResolve && campaign.state !== 'resolving_identities' && (
-          <span className="hint">Upload an HR roster and at least one access list first.</span>
+          <span className="hint">
+            {RESOLVE_STATES.has(campaign.state) || campaign.state === 'draft'
+              ? 'Upload an HR roster and at least one access list first.'
+              : 'Matching is locked once analysis has run. Upload a new file to start over.'}
+          </span>
         )}
       </div>
       {error && <div className="error">{error}</div>}
@@ -551,6 +573,173 @@ function IdentityRow({
         </div>
       )}
       {error && <div className="error">{error}</div>}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+const SEVERITIES = ['critical', 'high', 'medium', 'low', 'none'] as const
+
+const RULE_LABELS: Record<string, string> = {
+  terminated_privileged_active: 'Terminated, still has privileged access',
+  terminated_active: 'Terminated, account still active',
+  terminated_active_within_grace: 'Recently terminated, still active (within grace period)',
+  privileged_access_critical: 'Critical-tier privileged access',
+  privileged_access_high: 'High-tier privileged access',
+  privileged_access_medium: 'Sensitive access',
+  external_account_active: 'External user with active access',
+  dormant_account: 'Dormant account',
+  admin_role: 'Admin-like role not in the privileged catalog',
+}
+
+function AnalysisSection({
+  campaign,
+  identities,
+  analysis,
+  onChange,
+}: {
+  campaign: Campaign
+  identities: IdentityList | null
+  analysis: Analysis | null
+  onChange: () => Promise<void>
+}) {
+  const api = useApi()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [severity, setSeverity] = useState<string>('flagged')
+
+  const ready = Boolean(identities?.summary.ready_for_analysis)
+  const canRun = ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
+  const summary = analysis?.summary ?? null
+  const items = useMemo(() => {
+    const all = analysis?.items ?? []
+    if (severity === 'flagged') return all.filter((i) => i.severity !== 'none')
+    if (severity === 'all') return all
+    return all.filter((i) => i.severity === severity)
+  }, [analysis, severity])
+
+  async function run() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`/campaigns/${campaign.id}/analyze`, { method: 'POST' })
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Risk analysis</h2>
+        {summary?.rule_set_version && <span className="badge">Rules {summary.rule_set_version}</span>}
+      </div>
+      <p className="panel-text">
+        The rules engine checks every account and entitlement against HR status and the privileged access catalog.
+        Each entitlement becomes one review item, assigned to the person's manager.
+      </p>
+      <div className="actions">
+        <button type="button" className="primary" disabled={!canRun || busy} onClick={run}>
+          {busy ? 'Analyzing…' : summary ? 'Re-run analysis' : 'Run analysis'}
+        </button>
+        {!ready && <span className="hint">Resolve every identity first.</span>}
+      </div>
+      {error && <div className="error">{error}</div>}
+
+      {summary && (
+        <>
+          <div className="stat-row">
+            {SEVERITIES.map((s) => (
+              <div key={s} className={`mini-stat sev-${s}`}>
+                <span className="label">{s === 'none' ? 'No findings' : s}</span>
+                <span className="mini-value">{summary.items_by_severity[s] ?? 0}</span>
+              </div>
+            ))}
+          </div>
+          <p className="hint">
+            {summary.review_items} review items · {summary.findings} findings
+            {summary.unassigned > 0 && ` · ${summary.unassigned} without a reviewer (no manager or app owner on file)`}
+          </p>
+
+          <div className="tabs" role="tablist">
+            {[
+              ['flagged', 'With findings'],
+              ...SEVERITIES.slice(0, 4).map((s) => [s, s[0].toUpperCase() + s.slice(1)]),
+              ['all', 'All'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={severity === key}
+                className={'tab' + (severity === key ? ' active' : '')}
+                onClick={() => setSeverity(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {items.length === 0 ? (
+            <div className="empty"><p>Nothing here.</p></div>
+          ) : (
+            <div className="review-list">
+              {items.map((item) => <ReviewItemRow key={item.id} item={item} />)}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function ReviewItemRow({ item }: { item: ReviewItem }) {
+  const [open, setOpen] = useState(false)
+  const who = item.person ? item.person.name ?? item.person.email : item.account_type === 'service' || item.account_type === 'shared' ? `${item.account_type} account` : item.account_type === 'external' ? 'External user' : '—'
+  return (
+    <div className={`review-item sev-border-${item.severity}`}>
+      <div className="review-main">
+        <span className={'severity ' + item.severity}>{item.severity === 'none' ? 'ok' : item.severity}</span>
+        <div className="review-what">
+          <strong>{item.entitlement}</strong>
+          <span className="identity-sub">{item.application} · {item.native_id}{item.account_status === 'inactive' ? ' · disabled' : ''}</span>
+        </div>
+        <div className="review-who">
+          <span>
+            {who}
+            {item.person?.employment_status === 'terminated' && <span className="term-tag">terminated</span>}
+          </span>
+          <span className="identity-sub">
+            Reviewer: {item.reviewer ? item.reviewer.name ?? item.reviewer.email : <em>unassigned</em>}
+          </span>
+        </div>
+      </div>
+      {item.findings.length > 0 && (
+        <div className="review-findings">
+          {item.findings.map((f) => (
+            <div key={f.id} className="finding">
+              <span className={'dot ' + f.severity} aria-hidden="true" />
+              <span>{RULE_LABELS[f.rule_id] ?? f.rule_id}</span>
+            </div>
+          ))}
+          <button type="button" className="ghost small" onClick={() => setOpen(!open)}>
+            {open ? 'Hide evidence' : 'Why?'}
+          </button>
+          {open && (
+            <div className="finding-detail">
+              {item.findings.map((f) => (
+                <p key={f.id}>
+                  <code>{f.rule_id} v{f.rule_version}</code> {f.explanation}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

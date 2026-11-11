@@ -161,3 +161,36 @@ class IdentityListOut(BaseModel):
 class IdentityConfirm(BaseModel):
     person_id: Optional[_UUID] = None
     account_type: Optional[str] = Field(default=None, pattern="^(service|shared|external)$")
+
+
+class FindingOut(BaseModel):
+    id: _UUID
+    rule_id: str
+    rule_version: int
+    severity: str
+    account_id: Optional[_UUID]
+    inputs: Dict[str, Any]
+    explanation: str
+
+
+class ReviewItemOut(BaseModel):
+    id: _UUID
+    severity: str
+    status: str
+    application: str
+    entitlement: str
+    privilege_tier: Optional[str]
+    account_id: _UUID
+    native_id: str
+    account_type: str
+    account_status: Optional[str]
+    last_login_at: Optional[_datetime]
+    person: Optional[PersonRef]
+    reviewer: Optional[PersonRef]
+    recommendation: Optional[str]
+    findings: List[FindingOut]
+
+
+class AnalysisOut(BaseModel):
+    summary: Optional[Dict[str, Any]]
+    items: List[ReviewItemOut]
