@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
 import { useAuth0 } from '@auth0/auth0-react'
+import { NavLink, Route, Routes } from 'react-router-dom'
+import CampaignsPage from './pages/Campaigns'
+import CampaignDetailPage from './pages/CampaignDetail'
 import './App.css'
 import { API_BASE_URL, authEnabled } from './config'
 
@@ -119,7 +122,7 @@ function prettifyIssue(issueType: string, explanation: string) {
 }
 
 function AppMain() {
-  const { isAuthenticated, isLoading: authLoading, loginWithRedirect, logout, getAccessTokenSilently, user } = useAuth0()
+  const { isAuthenticated, getAccessTokenSilently } = useAuth0()
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
@@ -215,34 +218,12 @@ function AppMain() {
     <div className="page">
       <header className="hero">
         <div>
-          <p className="eyebrow">UAR Copilot</p>
-          <h1>UAR Copilot – Automated Access Risk Detection</h1>
+          <p className="eyebrow">Quick scan</p>
+          <h1>Automated Access Risk Detection</h1>
           <p className="subhead">
             Upload access and termination files to generate an audit-grade risk
             summary with prioritized findings.
           </p>
-          {authEnabled && (
-            <div className="auth-row">
-              {authLoading ? (
-                <span className="auth-label">Checking session…</span>
-              ) : isAuthenticated ? (
-                <>
-                  <span className="auth-label">Signed in as {user?.email ?? user?.name}</span>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
-                  >
-                    Sign out
-                  </button>
-                </>
-              ) : (
-                <button type="button" className="primary" onClick={() => loginWithRedirect()}>
-                  Sign in
-                </button>
-              )}
-            </div>
-          )}
         </div>
         <div className="hero-card">
           <div className="stat">
@@ -419,15 +400,82 @@ function AppMain() {
         </section>
       </section>
 
-      <footer className="footer">
-        <span>UAR Copilot • Internal Audit Preview</span>
-        <span>{ruleSetVersion ? `Rule set ${ruleSetVersion}` : `API: ${API_BASE_URL}`}</span>
-      </footer>
-      <Analytics />
+      {ruleSetVersion && <p className="hint">Rule set {ruleSetVersion}</p>}
+    </div>
+  )
+}
+
+function AuthBar() {
+  const { isAuthenticated, isLoading, loginWithRedirect, logout, user } = useAuth0()
+  if (!authEnabled) return <span className="auth-label">Local mode (no sign-in)</span>
+  if (isLoading) return <span className="auth-label">Checking session…</span>
+  if (!isAuthenticated) {
+    return (
+      <button type="button" className="primary small" onClick={() => loginWithRedirect()}>
+        Sign in
+      </button>
+    )
+  }
+  return (
+    <>
+      <span className="auth-label">{user?.email ?? user?.name}</span>
+      <button
+        type="button"
+        className="ghost small"
+        onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}
+      >
+        Sign out
+      </button>
+    </>
+  )
+}
+
+/** Campaign pages hold customer data, so they need a signed-in user. */
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0()
+  if (!authEnabled || isAuthenticated) return <>{children}</>
+  if (isLoading) return <p className="panel-text">Checking session…</p>
+  return (
+    <div className="panel signin-panel">
+      <h2>Sign in to see your campaigns</h2>
+      <p className="panel-text">Campaigns store your access data, so they are only visible to your organization.</p>
+      <button
+        type="button"
+        className="primary"
+        onClick={() => loginWithRedirect({ appState: { returnTo: window.location.pathname } })}
+      >
+        Sign in
+      </button>
     </div>
   )
 }
 
 export default function App() {
-  return <AppMain />
+  return (
+    <>
+      <nav className="topnav">
+        <NavLink to="/" end className="brand">UAR Copilot</NavLink>
+        <div className="nav-links">
+          <NavLink to="/" end>Quick scan</NavLink>
+          <NavLink to="/campaigns">Campaigns</NavLink>
+        </div>
+        <div className="nav-auth">
+          <AuthBar />
+        </div>
+      </nav>
+      <main>
+        <Routes>
+          <Route path="/" element={<AppMain />} />
+          <Route path="/campaigns" element={<RequireAuth><CampaignsPage /></RequireAuth>} />
+          <Route path="/campaigns/:id" element={<RequireAuth><CampaignDetailPage /></RequireAuth>} />
+          <Route path="*" element={<div className="empty"><p>Page not found.</p></div>} />
+        </Routes>
+      </main>
+      <footer className="footer">
+        <span>UAR Copilot • Internal Audit Preview</span>
+        <span>API: {API_BASE_URL}</span>
+      </footer>
+      <Analytics />
+    </>
+  )
 }

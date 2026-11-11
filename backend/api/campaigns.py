@@ -9,9 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.auth import require_auth
-from backend.db.models import Application, Campaign, EvidenceEvent, SourceSnapshot
+from backend.db.models import AccountType, Application, Campaign, EvidenceEvent, IdentityLink, Person, SourceSnapshot
 from backend.db.session import get_engine, tenant_session
 from backend.domain import campaigns as campaign_service
+from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
 from backend.domain.evidence import verify_chain
 from backend.domain.tenants import resolve_tenant
@@ -21,7 +22,12 @@ from schemas.user_schema import (
     ColumnMapping,
     EvidenceEventOut,
     EvidenceOut,
+    IdentityCandidateOut,
+    IdentityConfirm,
+    IdentityItemOut,
+    IdentityListOut,
     IngestOut,
+    PersonRef,
     SnapshotOut,
 )
 
@@ -108,7 +114,7 @@ def create_campaign(body: CampaignCreate, ctx: Ctx = Depends(get_ctx)):
     try:
         c = campaign_service.create_campaign(ctx.session, ctx.tenant_id, ctx.actor, **body.model_dump())
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     return _campaign_out(ctx.session, c)
 
 
@@ -197,3 +203,105 @@ def get_evidence(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
             for e in events
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Identity resolution
+# ---------------------------------------------------------------------------
+
+
+def _person_ref(p: Person) -> PersonRef:
+    return PersonRef(
+        id=p.id,
+        employee_id=p.employee_id,
+        name=p.name,
+        email=p.email,
+        department=p.department,
+        employment_status=p.employment_status,
+    )
+
+
+def _identity_list(ctx: Ctx, c: Campaign, status_filter: str | None = None) -> IdentityListOut:
+    accounts = identity_service.campaign_accounts(ctx.session, c)
+    ids = [a.id for a in accounts]
+    links = {
+        link.account_id: link
+        for link in ctx.session.scalars(select(IdentityLink).where(IdentityLink.account_id.in_(ids)))
+    }
+    people = {p.id: p for p in ctx.session.scalars(select(Person))}
+    apps = {a.id: a.name for a in ctx.session.scalars(select(Application))}
+    items = []
+    for a in sorted(accounts, key=lambda a: (apps.get(a.application_id) or "", a.native_id)):
+        link = links.get(a.id)
+        status_value = link.status if link else "not_resolved"
+        if status_filter and status_value != status_filter:
+            continue
+        cands = []
+        for cand in (link.candidates if link else []) or []:
+            person = people.get(uuid.UUID(cand["person_id"]))
+            if person:
+                cands.append(IdentityCandidateOut(person=_person_ref(person), method=cand["method"], confidence=cand["confidence"]))
+        person = people.get(link.person_id) if link and link.person_id else None
+        items.append(
+            IdentityItemOut(
+                account_id=a.id,
+                application=apps.get(a.application_id),
+                native_id=a.native_id,
+                username=a.username,
+                email=a.email,
+                display_name=a.display_name,
+                account_type=a.account_type.value,
+                status=status_value,
+                method=link.method if link else None,
+                confidence=link.confidence if link else None,
+                person=_person_ref(person) if person else None,
+                confirmed_by=link.confirmed_by if link else None,
+                candidates=cands,
+            )
+        )
+    return IdentityListOut(summary=identity_service.identity_summary(ctx.session, c), items=items)
+
+
+@router.post("/{campaign_id}/identities/resolve", response_model=IdentityListOut)
+def resolve_identities(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    try:
+        identity_service.resolve_identities(ctx.session, c, ctx.actor)
+    except campaign_service.InvalidTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _identity_list(ctx, c)
+
+
+@router.get("/{campaign_id}/identities", response_model=IdentityListOut)
+def list_identities(campaign_id: uuid.UUID, status_filter: str | None = None, ctx: Ctx = Depends(get_ctx)):
+    return _identity_list(ctx, _load(ctx, campaign_id), status_filter)
+
+
+@router.post("/{campaign_id}/identities/{account_id}", response_model=IdentityItemOut)
+def confirm_identity(campaign_id: uuid.UUID, account_id: uuid.UUID, body: IdentityConfirm, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    try:
+        identity_service.confirm_link(
+            ctx.session,
+            c,
+            account_id,
+            ctx.actor,
+            person_id=body.person_id,
+            account_type=AccountType(body.account_type) if body.account_type else None,
+        )
+    except campaign_service.InvalidTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return next(i for i in _identity_list(ctx, c).items if i.account_id == account_id)
+
+
+@router.get("/{campaign_id}/people", response_model=List[PersonRef])
+def list_people(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    """People from the tenant's HR roster, for linking accounts by hand."""
+    _load(ctx, campaign_id)
+    return [_person_ref(p) for p in ctx.session.scalars(select(Person).order_by(Person.name))]

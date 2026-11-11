@@ -184,7 +184,11 @@ class IdentityLink(TenantOwned, Base):
     person_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("person.id", ondelete="CASCADE")
     )
-    method: Mapped[str] = mapped_column(String(50))  # employee_id | email | upn | name | manual
+    method: Mapped[str] = mapped_column(String(50))  # employee_id | email | username | name | manual | none
+    # matched | ambiguous | unmatched | non_human
+    status: Mapped[str] = mapped_column(String(20), default="unmatched", server_default="unmatched", index=True)
+    # Ranked alternatives shown to a human for ambiguous links: [{person_id, method, confidence}]
+    candidates: Mapped[Any] = mapped_column(JsonType, default=list, server_default="[]")
     confidence: Mapped[float] = mapped_column(Float)
     confirmed_by: Mapped[Optional[str]] = mapped_column(String(255))
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

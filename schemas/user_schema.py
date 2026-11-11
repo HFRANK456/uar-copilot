@@ -120,3 +120,44 @@ class EvidenceOut(BaseModel):
     campaign_id: _UUID
     verification: Dict[str, Any]
     events: List[EvidenceEventOut]
+
+
+class PersonRef(BaseModel):
+    id: _UUID
+    employee_id: Optional[str]
+    name: Optional[str]
+    email: Optional[str]
+    department: Optional[str]
+    employment_status: Optional[str]
+
+
+class IdentityCandidateOut(BaseModel):
+    person: PersonRef
+    method: str
+    confidence: float
+
+
+class IdentityItemOut(BaseModel):
+    account_id: _UUID
+    application: Optional[str]
+    native_id: str
+    username: Optional[str]
+    email: Optional[str]
+    display_name: Optional[str]
+    account_type: str
+    status: str
+    method: Optional[str]
+    confidence: Optional[float]
+    person: Optional[PersonRef]
+    confirmed_by: Optional[str]
+    candidates: List[IdentityCandidateOut]
+
+
+class IdentityListOut(BaseModel):
+    summary: Dict[str, Any]
+    items: List[IdentityItemOut]
+
+
+class IdentityConfirm(BaseModel):
+    person_id: Optional[_UUID] = None
+    account_type: Optional[str] = Field(default=None, pattern="^(service|shared|external)$")

@@ -42,3 +42,8 @@ Privileged roles are tiered by `backend/privileged_access_catalog.py`.
 
 Every issue carries `rule_version`, the `inputs` that triggered it, a `row_ref` and SOC 2 `control_refs`,
 and the response includes column-mapping decisions and a SHA-256 of each uploaded file.
+
+Identity matching links accounts to HR people by employee ID (1.00), email (0.99), username vs email
+local part (0.92), display name (0.80) or username pattern such as `pshah` (0.75). Links at 0.90 or above
+are automatic; weaker or tied matches queue for a person, service/shared accounts are set aside, and
+accounts on an unknown email domain are marked external. Re-running never overwrites a manual decision.
