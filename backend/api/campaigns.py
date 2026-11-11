@@ -298,3 +298,10 @@ def confirm_identity(campaign_id: uuid.UUID, account_id: uuid.UUID, body: Identi
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     return next(i for i in _identity_list(ctx, c).items if i.account_id == account_id)
+
+
+@router.get("/{campaign_id}/people", response_model=List[PersonRef])
+def list_people(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    """People from the tenant's HR roster, for linking accounts by hand."""
+    _load(ctx, campaign_id)
+    return [_person_ref(p) for p in ctx.session.scalars(select(Person).order_by(Person.name))]

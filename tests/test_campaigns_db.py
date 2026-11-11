@@ -362,3 +362,10 @@ def test_hr_only_or_access_only_cannot_resolve(api):
     api.post(f"/campaigns/{cid}/sources/hr", files={"file": ("hr.csv", (DATA / "sample_hr_roster.csv").read_bytes())})
     r = api.post(f"/campaigns/{cid}/identities/resolve")
     assert r.status_code == 400 and "access list" in r.json()["detail"]
+
+
+def test_api_people_list(api):
+    cid = _ingested_campaign(api)
+    people = api.get(f"/campaigns/{cid}/people").json()
+    assert len(people) == 6 and people[0]["name"] == "Alex Chen"
+    assert api.get(f"/campaigns/{uuid.uuid4()}/people").status_code == 404
