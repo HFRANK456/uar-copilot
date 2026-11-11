@@ -189,8 +189,47 @@ class ReviewItemOut(BaseModel):
     reviewer: Optional[PersonRef]
     recommendation: Optional[str]
     findings: List[FindingOut]
+    decision: Optional["DecisionOut"] = None
+    is_mine: bool = False
+    is_own_access: bool = False
+
+
+class DecisionOut(BaseModel):
+    id: _UUID
+    action: str
+    justification: Optional[str]
+    actor: str
+    decided_at: _datetime
+    channel: str
 
 
 class AnalysisOut(BaseModel):
     summary: Optional[Dict[str, Any]]
+    progress: Optional[Dict[str, Any]] = None
     items: List[ReviewItemOut]
+
+
+class DecisionIn(BaseModel):
+    action: str = Field(pattern="^(keep|revoke|modify)$")
+    justification: Optional[str] = Field(default=None, max_length=2000)
+
+
+class BulkKeepIn(BaseModel):
+    item_ids: List[_UUID] = Field(min_length=1, max_length=1000)
+
+
+class ReassignIn(BaseModel):
+    person_id: _UUID
+
+
+class OwnerIn(BaseModel):
+    person_id: Optional[_UUID] = None
+
+
+class ApplicationOut(BaseModel):
+    id: _UUID
+    name: str
+    owner: Optional[PersonRef]
+
+
+ReviewItemOut.model_rebuild()

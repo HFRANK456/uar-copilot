@@ -97,6 +97,30 @@ def _get_rsa_key(jwks: Dict[str, Any], kid: str) -> Optional[Dict[str, str]]:
     return None
 
 
+_USERINFO_CACHE: dict[str, tuple[Optional[str], float]] = {}
+_USERINFO_TTL_SECONDS = 60 * 30
+
+
+def _email_from_userinfo(token: str, settings: Auth0Settings, sub: str) -> Optional[str]:
+    """Access tokens carry no email by default; ask Auth0 who this is (cached per user)."""
+    cached = _USERINFO_CACHE.get(sub)
+    if cached and time.time() - cached[1] < _USERINFO_TTL_SECONDS:
+        return cached[0]
+    email: Optional[str] = None
+    try:
+        req = urllib.request.Request(
+            f"https://{settings.domain}/userinfo", headers={"Authorization": f"Bearer {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+        if info.get("sub") == sub and info.get("email_verified", True):
+            email = info.get("email")
+    except Exception:  # identity still comes from the verified token; email is best effort
+        logger.warning("userinfo_lookup_failed", extra={"sub": sub})
+    _USERINFO_CACHE[sub] = (email, time.time())
+    return email
+
+
 def verify_auth0_token(token: str, settings: Auth0Settings) -> Dict[str, Any]:
     try:
         header = jwt.get_unverified_header(token)
@@ -129,12 +153,16 @@ def verify_auth0_token(token: str, settings: Auth0Settings) -> Dict[str, Any]:
             audience=settings.audience,
             issuer=settings.issuer,
         )
-        return payload
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token validation failed.",
         ) from exc
+    if not payload.get("email") and payload.get("sub"):
+        email = _email_from_userinfo(token, settings, payload["sub"])
+        if email:
+            payload["email"] = email
+    return payload
 
 
 def auth_disabled() -> bool:

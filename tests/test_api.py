@@ -79,3 +79,12 @@ def test_missing_user_id_is_400(monkeypatch, data_dir):
         "termination": ("t.csv", (data_dir / "sample_termination.csv").read_bytes(), "text/csv"),
     }
     assert c.post("/upload", files=files).status_code == 400
+
+
+def test_cors_allows_put_for_app_owner(monkeypatch):
+    c = _client(monkeypatch, CORS_ORIGINS="https://app.example.com")
+    r = c.options(
+        "/campaigns/x/applications/y/owner",
+        headers={"Origin": "https://app.example.com", "Access-Control-Request-Method": "PUT"},
+    )
+    assert r.status_code == 200

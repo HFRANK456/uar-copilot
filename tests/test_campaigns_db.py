@@ -477,3 +477,156 @@ def test_reviewer_selection_rules():
     assert _pick_reviewer(by_manager, None, app, people) == (owner.id, "app_owner")
     # The app owner never reviews their own account.
     assert _pick_reviewer(by_owner, owner, app, people)[0] != owner.id
+
+
+# ---------------------------------------------------------------------------
+# Review workflow
+# ---------------------------------------------------------------------------
+
+
+def _review_campaign(api):
+    cid = _resolved_campaign(api)
+    api.post(f"/campaigns/{cid}/analyze")
+    return cid
+
+
+def _items(api, cid, **params):
+    q = "&".join(f"{k}={v}" for k, v in params.items())
+    return {(i["application"], i["native_id"], i["entitlement"]): i
+            for i in api.get(f"/campaigns/{cid}/review-items?{q}").json()["items"]}
+
+
+def test_decisions_need_review_started(api):
+    cid = _review_campaign(api)
+    item = next(iter(_items(api, cid).values()))
+    r = api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json={"action": "revoke"})
+    assert r.status_code == 409
+    assert api.post(f"/campaigns/{cid}/review/start").status_code == 200
+    assert api.get(f"/campaigns/{cid}").json()["state"] == "in_review"
+    assert api.post(f"/campaigns/{cid}/analyze").status_code == 409  # analysis is frozen
+    assert api.post(f"/campaigns/{cid}/review/start").status_code == 409
+
+
+def test_review_decision_rules(api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    items = _items(api, cid)
+    url = lambda key: f"/campaigns/{cid}/review-items/{items[key]['id']}/decision"  # noqa: E731
+    jordan = ("AWS", "jordan.kim", "AdministratorAccess")
+
+    # Keeping critical access needs a real justification.
+    assert api.post(url(jordan), json={"action": "keep"}).status_code == 422
+    assert api.post(url(jordan), json={"action": "keep", "justification": "ok"}).status_code == 422
+    # Modify must say what changes.
+    assert api.post(url(jordan), json={"action": "modify"}).status_code == 422
+    # Revoke needs nothing.
+    r = api.post(url(jordan), json={"action": "revoke"})
+    assert r.status_code == 200 and r.json()["action"] == "revoke" and r.json()["actor"] == "grc@acme.io"
+
+    # Changing a decision adds a new one; the latest wins.
+    r = api.post(url(jordan), json={"action": "keep", "justification": "Break-glass account approved by CISO, ticket SEC-12"})
+    assert r.status_code == 200
+    after = _items(api, cid)[jordan]
+    assert after["status"] == "keep" and after["decision"]["justification"].startswith("Break-glass")
+
+    # Low-risk items can be kept without justification.
+    pshah = ("GitHub", "pshah", "admin")
+    assert api.post(url(pshah), json={"action": "keep"}).status_code == 200
+
+    progress = api.get(f"/campaigns/{cid}/review-items").json()["progress"]
+    assert progress["decided"] == 2 and progress["by_action"]["keep"] == 2 and not progress["complete"]
+
+    ev = api.get(f"/campaigns/{cid}/evidence").json()
+    decided = [e for e in ev["events"] if e["type"] == "review.decided"]
+    assert [e["payload"]["action"] for e in decided] == ["revoke", "keep", "keep"]
+    assert ev["verification"]["valid"]
+
+
+def test_decisions_are_append_only(db_engine, api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    item = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
+    api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json={"action": "revoke"})
+    with pytest.raises(DBAPIError, match="append-only"):
+        with tenant_session(_tenant_of(db_engine, cid), db_engine) as s:
+            s.execute(text("update decision set action = 'keep'"))
+
+
+def _tenant_of(engine, campaign_id):
+    """Find which tenant owns a campaign (the tenant table has no RLS; campaigns do)."""
+    from sqlalchemy.orm import Session as S
+
+    from backend.db.models import Tenant
+
+    with S(engine) as s:
+        for t in s.scalars(select(Tenant)):
+            with tenant_session(t.id, engine) as ts_:
+                if ts_.scalar(select(Campaign.id).where(Campaign.id == campaign_id)):
+                    return t.id
+    raise AssertionError("tenant not found")
+
+
+def test_bulk_keep_refuses_risky_items(api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    items = list(_items(api, cid).values())
+    risky = [i["id"] for i in items if i["severity"] in ("critical", "high", "medium")]
+    safe = [i["id"] for i in items if i["severity"] in ("none", "low")]
+
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe + risky[:1]})
+    assert r.status_code == 422 and "one at a time" in r.json()["detail"]
+    assert api.get(f"/campaigns/{cid}/review-items").json()["progress"]["decided"] == 0  # all-or-nothing
+
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe})
+    assert r.status_code == 200 and r.json()["decided"] == len(safe)
+    progress = api.get(f"/campaigns/{cid}/review-items").json()["progress"]
+    assert progress["pending"] == len(risky) == progress["high_risk_pending"] + sum(
+        1 for i in items if i["severity"] == "medium")
+    bulk = [e for e in api.get(f"/campaigns/{cid}/evidence").json()["events"] if e["type"] == "review.decided"]
+    assert all(e["payload"]["bulk"] for e in bulk)
+
+
+def test_self_review_is_blocked(api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    api.principal["email"] = "priya.shah@acme.io"  # Priya signs in
+    items = _items(api, cid)
+    own = items[("AWS", "priya.shah", "AdministratorAccess")]
+    assert own["is_own_access"] is True
+    r = api.post(f"/campaigns/{cid}/review-items/{own['id']}/decision", json={"action": "revoke"})
+    assert r.status_code == 403
+
+    # Priya manages Marcus and Jordan, so those are hers to review.
+    mine = _items(api, cid, mine="true")
+    assert {k[1] for k in mine} == {"marcus.lee", "mlee", "jordan.kim"}
+    assert all(i["is_mine"] for i in mine.values())
+
+    # Bulk keep skips her own low-risk items instead of failing.
+    pshah = items[("GitHub", "pshah", "admin")]
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": [pshah["id"]]})
+    assert r.status_code == 200 and r.json() == {"decided": 0, "skipped_own_access": [pshah["id"]]}
+
+
+def test_reassign_and_app_owner(api):
+    cid = _review_campaign(api)
+    people = {p["name"]: p["id"] for p in api.get(f"/campaigns/{cid}/people").json()}
+    items = _items(api, cid)
+    unassigned_aws = [i for (app, _, _), i in items.items() if app == "AWS" and i["reviewer"] is None]
+    assert unassigned_aws  # the contractor and the service account
+
+    apps = {a["name"]: a for a in api.get(f"/campaigns/{cid}/applications").json()}
+    assert apps["AWS"]["owner"] is None
+    r = api.put(f"/campaigns/{cid}/applications/{apps['AWS']['id']}/owner", json={"person_id": people["Marcus Lee"]})
+    assert r.status_code == 200 and r.json()["items_assigned"] == len(unassigned_aws)
+    after = _items(api, cid)
+    assert all(after[k]["reviewer"]["name"] == "Marcus Lee" for k in after if k[0] == "AWS" and items[k]["reviewer"] is None)
+    assert api.get(f"/campaigns/{cid}/applications").json()[0]["owner"]["name"] == "Marcus Lee"
+
+    # Reassign; a person can't be made reviewer of their own access.
+    jordan = items[("AWS", "jordan.kim", "AdministratorAccess")]
+    url = f"/campaigns/{cid}/review-items/{jordan['id']}/reassign"
+    r = api.post(url, json={"person_id": people["Sam Ortiz"]})
+    assert r.status_code == 200 and r.json()["reviewer"]["name"] == "Sam Ortiz"
+    assert api.post(url, json={"person_id": people["Jordan Kim"]}).status_code == 403
+    types = [e["type"] for e in api.get(f"/campaigns/{cid}/evidence").json()["events"]]
+    assert "application.owner_set" in types and "review.reassigned" in types

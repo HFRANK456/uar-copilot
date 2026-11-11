@@ -4,6 +4,7 @@ import {
   ApiError,
   useApi,
   type Analysis,
+  type Application,
   type ReviewItem,
   type Campaign,
   type Evidence,
@@ -109,7 +110,7 @@ export default function CampaignDetailPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} />
+      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} reviewDone={Boolean(analysis?.progress?.complete && campaign.state === 'in_review')} />
 
       <SourcesSection campaign={campaign} onChange={refresh} />
 
@@ -121,7 +122,7 @@ export default function CampaignDetailPage() {
         onChange={refresh}
       />
 
-      <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} onChange={refresh} />
+      <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} people={people} onChange={refresh} />
 
       <EvidenceSection evidence={evidence} />
     </div>
@@ -135,11 +136,13 @@ function Steps({
   hasAccess,
   identities,
   analyzed,
+  reviewDone,
 }: {
   hasHr: boolean
   hasAccess: boolean
   identities: IdentityList | null
   analyzed: boolean
+  reviewDone: boolean
 }) {
   const resolved = (identities?.summary.accounts ?? 0) > 0 && (identities?.summary.not_resolved ?? 0) === 0
   const ready = Boolean(identities?.summary.ready_for_analysis)
@@ -149,7 +152,8 @@ function Steps({
     { label: 'Match accounts to people', done: resolved },
     { label: 'Resolve the queue', done: ready },
     { label: 'Run analysis', done: analyzed },
-    { label: 'Review access', done: false, soon: true },
+    { label: 'Review access', done: reviewDone },
+    { label: 'Remediate & export evidence', done: false, soon: true },
   ]
   return (
     <ol className="steps">
@@ -597,73 +601,120 @@ function AnalysisSection({
   campaign,
   identities,
   analysis,
+  people,
   onChange,
 }: {
   campaign: Campaign
   identities: IdentityList | null
   analysis: Analysis | null
+  people: PersonRef[]
   onChange: () => Promise<void>
 }) {
   const api = useApi()
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [severity, setSeverity] = useState<string>('flagged')
+  const [mineOnly, setMineOnly] = useState(false)
+  const [pendingOnly, setPendingOnly] = useState(false)
 
+  const inReview = campaign.state === 'in_review'
   const ready = Boolean(identities?.summary.ready_for_analysis)
   const canRun = ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
   const summary = analysis?.summary ?? null
+  const progress = analysis?.progress ?? null
   const items = useMemo(() => {
-    const all = analysis?.items ?? []
+    let all = analysis?.items ?? []
+    if (mineOnly) all = all.filter((i) => i.is_mine)
+    if (pendingOnly) all = all.filter((i) => i.status === 'pending')
     if (severity === 'flagged') return all.filter((i) => i.severity !== 'none')
     if (severity === 'all') return all
     return all.filter((i) => i.severity === severity)
-  }, [analysis, severity])
+  }, [analysis, severity, mineOnly, pendingOnly])
+  const bulkEligible = items.filter(
+    (i) => i.status === 'pending' && (i.severity === 'none' || i.severity === 'low') && !i.is_own_access,
+  )
 
-  async function run() {
-    setBusy(true)
+  async function call(label: string, path: string, init: RequestInit) {
+    setBusy(label)
     setError(null)
     try {
-      await api(`/campaigns/${campaign.id}/analyze`, { method: 'POST' })
+      await api(path, init)
       await onChange()
     } catch (err) {
       setError(errorText(err))
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
 
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2>Risk analysis</h2>
+        <h2>{inReview ? 'Access review' : 'Risk analysis'}</h2>
         {summary?.rule_set_version && <span className="badge">Rules {summary.rule_set_version}</span>}
       </div>
       <p className="panel-text">
-        The rules engine checks every account and entitlement against HR status and the privileged access catalog.
-        Each entitlement becomes one review item, assigned to the person's manager.
+        {inReview
+          ? 'Decide on each item: keep, revoke, or modify. Keeping high or critical access needs a written justification. Low-risk items can be kept in bulk; high-risk items are always decided one at a time.'
+          : 'The rules engine checks every account and entitlement against HR status and the privileged access catalog. Each entitlement becomes one review item, assigned to the person\'s manager.'}
       </p>
-      <div className="actions">
-        <button type="button" className="primary" disabled={!canRun || busy} onClick={run}>
-          {busy ? 'Analyzing…' : summary ? 'Re-run analysis' : 'Run analysis'}
-        </button>
-        {!ready && <span className="hint">Resolve every identity first.</span>}
-      </div>
+      {!inReview && (
+        <div className="actions">
+          <button type="button" className="primary" disabled={!canRun || busy !== null}
+            onClick={() => call('analyze', `/campaigns/${campaign.id}/analyze`, { method: 'POST' })}>
+            {busy === 'analyze' ? 'Analyzing…' : summary ? 'Re-run analysis' : 'Run analysis'}
+          </button>
+          {summary && campaign.state === 'analyzing' && (
+            <button type="button" className="primary" disabled={busy !== null}
+              onClick={() => call('start', `/campaigns/${campaign.id}/review/start`, { method: 'POST' })}>
+              {busy === 'start' ? 'Starting…' : 'Start review'}
+            </button>
+          )}
+          {!ready && <span className="hint">Resolve every identity first.</span>}
+          {summary && campaign.state === 'analyzing' && (
+            <span className="hint">Starting the review freezes the analysis.</span>
+          )}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
+
+      {inReview && progress && (
+        <div className="progress-block">
+          <div className="progress-head">
+            <strong>{progress.decided} of {progress.total} decided</strong>
+            <span className="hint">
+              {progress.by_action.keep} kept · {progress.by_action.revoke} revoked · {progress.by_action.modify} to modify
+              {progress.high_risk_pending > 0 && ` · ${progress.high_risk_pending} high-risk still open`}
+            </span>
+          </div>
+          <div className="progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total}
+            aria-valuenow={progress.decided}>
+            <span style={{ width: `${progress.total ? (100 * progress.decided) / progress.total : 0}%` }} />
+          </div>
+          {progress.complete && <div className="notice">Every item has a decision.</div>}
+        </div>
+      )}
 
       {summary && (
         <>
-          <div className="stat-row">
-            {SEVERITIES.map((s) => (
-              <div key={s} className={`mini-stat sev-${s}`}>
-                <span className="label">{s === 'none' ? 'No findings' : s}</span>
-                <span className="mini-value">{summary.items_by_severity[s] ?? 0}</span>
+          {!inReview && (
+            <>
+              <div className="stat-row">
+                {SEVERITIES.map((s) => (
+                  <div key={s} className={`mini-stat sev-${s}`}>
+                    <span className="label">{s === 'none' ? 'No findings' : s}</span>
+                    <span className="mini-value">{summary.items_by_severity[s] ?? 0}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <p className="hint">
-            {summary.review_items} review items · {summary.findings} findings
-            {summary.unassigned > 0 && ` · ${summary.unassigned} without a reviewer (no manager or app owner on file)`}
-          </p>
+              <p className="hint">
+                {summary.review_items} review items · {summary.findings} findings
+                {summary.unassigned > 0 && ` · ${summary.unassigned} without a reviewer`}
+              </p>
+            </>
+          )}
+
+          <AppOwners campaign={campaign} people={people} onChange={onChange} />
 
           <div className="tabs" role="tablist">
             {[
@@ -671,24 +722,41 @@ function AnalysisSection({
               ...SEVERITIES.slice(0, 4).map((s) => [s, s[0].toUpperCase() + s.slice(1)]),
               ['all', 'All'],
             ].map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={severity === key}
-                className={'tab' + (severity === key ? ' active' : '')}
-                onClick={() => setSeverity(key)}
-              >
+              <button key={key} type="button" role="tab" aria-selected={severity === key}
+                className={'tab' + (severity === key ? ' active' : '')} onClick={() => setSeverity(key)}>
                 {label}
               </button>
             ))}
+          </div>
+          <div className="filter-row">
+            <label className="check">
+              <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
+              Assigned to me
+            </label>
+            {inReview && (
+              <label className="check">
+                <input type="checkbox" checked={pendingOnly} onChange={(e) => setPendingOnly(e.target.checked)} />
+                Undecided only
+              </label>
+            )}
+            {inReview && bulkEligible.length > 0 && (
+              <button type="button" className="ghost small" disabled={busy !== null}
+                onClick={() => call('bulk', `/campaigns/${campaign.id}/review-items/bulk-keep`, {
+                  method: 'POST', body: JSON.stringify({ item_ids: bulkEligible.map((i) => i.id) }),
+                })}>
+                {busy === 'bulk' ? 'Keeping…' : `Keep ${bulkEligible.length} low-risk item${bulkEligible.length === 1 ? '' : 's'} shown`}
+              </button>
+            )}
           </div>
 
           {items.length === 0 ? (
             <div className="empty"><p>Nothing here.</p></div>
           ) : (
             <div className="review-list">
-              {items.map((item) => <ReviewItemRow key={item.id} item={item} />)}
+              {items.map((item) => (
+                <ReviewItemRow key={item.id} campaignId={campaign.id} item={item} inReview={inReview}
+                  people={people} onChange={onChange} />
+              ))}
             </div>
           )}
         </>
@@ -697,11 +765,116 @@ function AnalysisSection({
   )
 }
 
-function ReviewItemRow({ item }: { item: ReviewItem }) {
+function AppOwners({ campaign, people, onChange }: { campaign: Campaign; people: PersonRef[]; onChange: () => Promise<void> }) {
+  const api = useApi()
+  const [apps, setApps] = useState<Application[] | null>(null)
   const [open, setOpen] = useState(false)
-  const who = item.person ? item.person.name ?? item.person.email : item.account_type === 'service' || item.account_type === 'shared' ? `${item.account_type} account` : item.account_type === 'external' ? 'External user' : '—'
+  const [error, setError] = useState<string | null>(null)
+
+  async function toggle() {
+    if (!open && apps === null) {
+      try {
+        setApps(await api<Application[]>(`/campaigns/${campaign.id}/applications`))
+      } catch (err) {
+        setError(errorText(err))
+      }
+    }
+    setOpen(!open)
+  }
+
+  async function setOwner(appId: string, personId: string) {
+    setError(null)
+    try {
+      await api(`/campaigns/${campaign.id}/applications/${appId}/owner`, {
+        method: 'PUT', body: JSON.stringify({ person_id: personId || null }),
+      })
+      setApps(await api<Application[]>(`/campaigns/${campaign.id}/applications`))
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }
+
   return (
-    <div className={`review-item sev-border-${item.severity}`}>
+    <div className="owners">
+      <button type="button" className="ghost small" onClick={toggle}>
+        {open ? 'Hide application owners' : 'Application owners'}
+      </button>
+      {open && apps && (
+        <div className="owner-list">
+          <p className="hint">An app owner reviews items that have no manager to review them.</p>
+          {apps.map((a) => (
+            <label key={a.id} className="owner-row">
+              <span>{a.name}</span>
+              <select value={a.owner?.id ?? ''} onChange={(e) => setOwner(a.id, e.target.value)} aria-label={`Owner of ${a.name}`}>
+                <option value="">No owner</option>
+                {people.map((p) => <option key={p.id} value={p.id}>{p.name ?? p.email}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+    </div>
+  )
+}
+
+const ACTION_LABELS: Record<string, string> = { keep: 'Kept', revoke: 'Revoke', modify: 'Modify' }
+
+function ReviewItemRow({
+  campaignId,
+  item,
+  inReview,
+  people,
+  onChange,
+}: {
+  campaignId: string
+  item: ReviewItem
+  inReview: boolean
+  people: PersonRef[]
+  onChange: () => Promise<void>
+}) {
+  const api = useApi()
+  const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<null | 'keep' | 'modify' | 'reassign'>(null)
+  const [text, setText] = useState('')
+  const [reviewer, setReviewer] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const needsJustification = item.severity === 'critical' || item.severity === 'high'
+
+  const who = item.person
+    ? item.person.name ?? item.person.email
+    : item.account_type === 'service' || item.account_type === 'shared'
+      ? `${item.account_type} account`
+      : item.account_type === 'external' ? 'External user' : '—'
+
+  async function send(path: string, body: object) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api(path, { method: 'POST', body: JSON.stringify(body) })
+      setMode(null)
+      setText('')
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const decide = (action: string, justification?: string) =>
+    send(`/campaigns/${campaignId}/review-items/${item.id}/decision`, { action, justification })
+
+  function keep() {
+    if (needsJustification) setMode('keep')
+    else void decide('keep')
+  }
+
+  const decided = item.status !== 'pending'
+
+  return (
+    <div className={`review-item sev-border-${item.severity}` + (decided ? ' decided' : '')}>
       <div className="review-main">
         <span className={'severity ' + item.severity}>{item.severity === 'none' ? 'ok' : item.severity}</span>
         <div className="review-what">
@@ -715,9 +888,11 @@ function ReviewItemRow({ item }: { item: ReviewItem }) {
           </span>
           <span className="identity-sub">
             Reviewer: {item.reviewer ? item.reviewer.name ?? item.reviewer.email : <em>unassigned</em>}
+            {item.is_mine && <span className="mine-tag">you</span>}
           </span>
         </div>
       </div>
+
       {item.findings.length > 0 && (
         <div className="review-findings">
           {item.findings.map((f) => (
@@ -732,14 +907,73 @@ function ReviewItemRow({ item }: { item: ReviewItem }) {
           {open && (
             <div className="finding-detail">
               {item.findings.map((f) => (
-                <p key={f.id}>
-                  <code>{f.rule_id} v{f.rule_version}</code> {f.explanation}
-                </p>
+                <p key={f.id}><code>{f.rule_id} v{f.rule_version}</code> {f.explanation}</p>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {item.decision && (
+        <div className={`decision decision-${item.decision.action}`}>
+          <strong>{ACTION_LABELS[item.decision.action]}</strong> by {item.decision.actor} ·{' '}
+          {new Date(item.decision.decided_at).toLocaleString()}
+          {item.decision.justification && <span className="decision-why">“{item.decision.justification}”</span>}
+        </div>
+      )}
+
+      {inReview && (
+        <div className="decision-actions">
+          {item.is_own_access ? (
+            <span className="hint">This is your own access, so someone else has to review it.</span>
+          ) : (
+            <>
+              <button type="button" className="act keep" disabled={busy || item.status === 'keep'} onClick={keep}>Keep</button>
+              <button type="button" className="act revoke" disabled={busy || item.status === 'revoke'} onClick={() => decide('revoke')}>Revoke</button>
+              <button type="button" className="act modify" disabled={busy} onClick={() => setMode(mode === 'modify' ? null : 'modify')}>Modify…</button>
+            </>
+          )}
+          <button type="button" className="ghost small" disabled={busy} onClick={() => setMode(mode === 'reassign' ? null : 'reassign')}>
+            Reassign…
+          </button>
+        </div>
+      )}
+
+      {(mode === 'keep' || mode === 'modify') && (
+        <form className="justify" onSubmit={(e) => { e.preventDefault(); void decide(mode, text) }}>
+          <label htmlFor={`j-${item.id}`}>
+            {mode === 'keep'
+              ? `Why should this ${item.severity}-risk access stay? (required)`
+              : 'What should change? (required)'}
+          </label>
+          <textarea id={`j-${item.id}`} rows={2} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)}
+            placeholder={mode === 'keep' ? 'e.g. On-call admin, approved by CISO in SEC-12' : 'e.g. Downgrade to ReadOnlyAccess'} />
+          <div className="justify-actions">
+            <button type="submit" className="primary small" disabled={busy || text.trim().length < 10}>
+              {mode === 'keep' ? 'Keep with justification' : 'Request change'}
+            </button>
+            <button type="button" className="ghost small" onClick={() => setMode(null)}>Cancel</button>
+            {text.trim().length > 0 && text.trim().length < 10 && <span className="hint">At least 10 characters.</span>}
+          </div>
+        </form>
+      )}
+
+      {mode === 'reassign' && (
+        <div className="picker">
+          <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} aria-label="New reviewer">
+            <option value="">Choose a reviewer…</option>
+            {people.filter((p) => p.id !== item.person?.id).map((p) => (
+              <option key={p.id} value={p.id}>{p.name ?? p.email}</option>
+            ))}
+          </select>
+          <button type="button" className="primary small" disabled={!reviewer || busy}
+            onClick={() => send(`/campaigns/${campaignId}/review-items/${item.id}/reassign`, { person_id: reviewer })}>
+            Reassign
+          </button>
+          <button type="button" className="ghost small" onClick={() => setMode(null)}>Cancel</button>
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
     </div>
   )
 }

@@ -13,6 +13,7 @@ from backend.db.models import (
     Account,
     AccountEntitlement,
     AccountType,
+    ReviewAction,
     Application,
     Campaign,
     Entitlement,
@@ -28,9 +29,16 @@ from backend.domain import analysis as analysis_service
 from backend.domain import campaigns as campaign_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
+from backend.domain import review as review_service
 from backend.domain.evidence import verify_chain
 from backend.domain.tenants import resolve_tenant
 from schemas.user_schema import (
+    ApplicationOut,
+    BulkKeepIn,
+    DecisionIn,
+    DecisionOut,
+    OwnerIn,
+    ReassignIn,
     AnalysisOut,
     FindingOut,
     ReviewItemOut,
@@ -54,10 +62,11 @@ MAX_UPLOAD_BYTES = ingest_service.MAX_FILE_BYTES
 
 
 class Ctx:
-    def __init__(self, session: Session, tenant_id: uuid.UUID, actor: str):
+    def __init__(self, session: Session, tenant_id: uuid.UUID, actor: str, email: str | None = None):
         self.session = session
         self.tenant_id = tenant_id
         self.actor = actor
+        self.email = email
 
 
 def get_ctx(principal: dict = Depends(require_auth)) -> Iterator[Ctx]:
@@ -70,7 +79,7 @@ def get_ctx(principal: dict = Depends(require_auth)) -> Iterator[Ctx]:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     actor = str(principal.get("email") or principal.get("sub") or "unknown")
     with tenant_session(tenant_id, engine) as session:
-        yield Ctx(session, tenant_id, actor)
+        yield Ctx(session, tenant_id, actor, principal.get("email"))
 
 
 def _snapshot_out(session: Session, snap: SourceSnapshot) -> SnapshotOut:
@@ -338,11 +347,12 @@ def _finding_out(f: Finding) -> FindingOut:
     )
 
 
-def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None) -> AnalysisOut:
+def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None, mine: bool = False) -> AnalysisOut:
     s = ctx.session
     items = list(s.scalars(select(ReviewItem).where(ReviewItem.campaign_id == c.id)))
     if severity:
         items = [i for i in items if i.severity == severity]
+    me = (ctx.email or "").strip().lower()
     grants = {g.id: g for g in s.scalars(select(AccountEntitlement).where(
         AccountEntitlement.id.in_([i.account_entitlement_id for i in items])))}
     accounts = {a.id: a for a in s.scalars(select(Account).where(Account.id.in_([g.account_id for g in grants.values()])))}
@@ -351,6 +361,7 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None) -> AnalysisOut
     people = {p.id: p for p in s.scalars(select(Person))}
     links = {l.account_id: l for l in s.scalars(select(IdentityLink).where(IdentityLink.account_id.in_(list(accounts))))}
     findings = {str(f.id): f for f in s.scalars(select(Finding).where(Finding.campaign_id == c.id))}
+    decisions = review_service.latest_decisions(s, [i.id for i in items])
 
     out = []
     for i in items:
@@ -369,9 +380,23 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None) -> AnalysisOut
             person=_person_ref(person) if person else None, reviewer=_person_ref(reviewer) if reviewer else None,
             recommendation=i.recommendation.value if i.recommendation else None,
             findings=[_finding_out(f) for f in item_findings],
+            decision=_decision_out(decisions[i.id]) if i.id in decisions else None,
+            is_mine=bool(me and reviewer and (reviewer.email or "").lower() == me),
+            is_own_access=bool(me and ((person and (person.email or "").lower() == me) or (a.email or "").lower() == me)),
         ))
+    if mine:
+        out = [o for o in out if o.is_mine]
     out.sort(key=lambda r: (_SEVERITY_ORDER.get(r.severity, 9), r.application, r.native_id, r.entitlement))
-    return AnalysisOut(summary=analysis_service.analysis_summary(s, c), items=out)
+    return AnalysisOut(
+        summary=analysis_service.analysis_summary(s, c),
+        progress=review_service.review_progress(s, c) if out or items else None,
+        items=out,
+    )
+
+
+def _decision_out(d) -> DecisionOut:
+    return DecisionOut(id=d.id, action=d.action.value, justification=d.justification, actor=d.actor_id,
+                       decided_at=d.decided_at, channel=d.channel)
 
 
 @router.post("/{campaign_id}/analyze", response_model=AnalysisOut)
@@ -387,8 +412,9 @@ def run_analysis(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 
 
 @router.get("/{campaign_id}/review-items", response_model=AnalysisOut)
-def list_review_items(campaign_id: uuid.UUID, severity: str | None = None, ctx: Ctx = Depends(get_ctx)):
-    return _analysis(ctx, _load(ctx, campaign_id), severity)
+def list_review_items(campaign_id: uuid.UUID, severity: str | None = None, mine: bool = False,
+                      ctx: Ctx = Depends(get_ctx)):
+    return _analysis(ctx, _load(ctx, campaign_id), severity, mine)
 
 
 @router.get("/{campaign_id}/findings", response_model=List[FindingOut])
@@ -396,3 +422,66 @@ def list_findings(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
     rows = ctx.session.scalars(select(Finding).where(Finding.campaign_id == c.id))
     return sorted((_finding_out(f) for f in rows), key=lambda f: (_SEVERITY_ORDER.get(f.severity, 9), f.rule_id))
+
+
+# ---------------------------------------------------------------------------
+# Review workflow
+# ---------------------------------------------------------------------------
+
+
+def _review_errors(fn):
+    try:
+        return fn()
+    except campaign_service.InvalidTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except review_service.SelfReview as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except review_service.ReviewError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@router.post("/{campaign_id}/review/start", response_model=AnalysisOut)
+def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: review_service.launch_review(ctx.session, c, ctx.actor))
+    return _analysis(ctx, c)
+
+
+@router.post("/{campaign_id}/review-items/{item_id}/decision", response_model=DecisionOut)
+def decide(campaign_id: uuid.UUID, item_id: uuid.UUID, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    d = _review_errors(lambda: review_service.decide(
+        ctx.session, c, item_id, ctx.actor, ctx.email, ReviewAction(body.action), body.justification))
+    return _decision_out(d)
+
+
+@router.post("/{campaign_id}/review-items/bulk-keep")
+def bulk_keep(campaign_id: uuid.UUID, body: BulkKeepIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    return _review_errors(lambda: review_service.bulk_keep(ctx.session, c, body.item_ids, ctx.actor, ctx.email))
+
+
+@router.post("/{campaign_id}/review-items/{item_id}/reassign", response_model=ReviewItemOut)
+def reassign(campaign_id: uuid.UUID, item_id: uuid.UUID, body: ReassignIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: review_service.reassign(ctx.session, c, item_id, body.person_id, ctx.actor))
+    return next(i for i in _analysis(ctx, c).items if i.id == item_id)
+
+
+@router.get("/{campaign_id}/applications", response_model=List[ApplicationOut])
+def list_applications(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    app_ids = {a.application_id for a in identity_service.campaign_accounts(ctx.session, c)}
+    people = {p.id: p for p in ctx.session.scalars(select(Person))}
+    apps = ctx.session.scalars(select(Application).where(Application.id.in_(app_ids)).order_by(Application.name))
+    return [ApplicationOut(id=a.id, name=a.name,
+                           owner=_person_ref(people[a.owner_person_id]) if a.owner_person_id in people else None)
+            for a in apps]
+
+
+@router.put("/{campaign_id}/applications/{application_id}/owner")
+def set_owner(campaign_id: uuid.UUID, application_id: uuid.UUID, body: OwnerIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    return _review_errors(lambda: review_service.set_app_owner(ctx.session, c, application_id, body.person_id, ctx.actor))
