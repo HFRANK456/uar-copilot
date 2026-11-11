@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -39,7 +40,13 @@ logger = logging.getLogger("uar")
 DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
 cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",") if o.strip() and o.strip() != "*"]
 
-app = FastAPI(title="UAR Copilot API")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _run_migrations()
+    yield
+
+
+app = FastAPI(title="UAR Copilot API", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -49,6 +56,24 @@ app.add_middleware(
 )
 
 app.include_router(campaigns_router)
+
+
+def _run_migrations() -> None:
+    """Bring the schema up to date at startup when a database is configured.
+
+    Render's free plan has no pre-deploy hook, and the service runs a single
+    instance, so migrating on boot is safe here. Set RUN_MIGRATIONS=false to
+    run them separately instead.
+    """
+    from backend.db.session import database_url
+
+    if not database_url() or os.getenv("RUN_MIGRATIONS", "true").strip().lower() in {"0", "false", "no"}:
+        return
+    from alembic import command
+    from alembic.config import Config
+
+    command.upgrade(Config(str(Path(__file__).resolve().parent / "alembic.ini")), "head")
+    logger.info("migrations_applied")
 
 if auth_disabled():
     logger.warning("auth_disabled", extra={"note": "AUTH_DISABLED is set; never use in a deployed environment"})
