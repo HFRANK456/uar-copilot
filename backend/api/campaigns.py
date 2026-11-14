@@ -30,6 +30,7 @@ from backend.domain import campaigns as campaign_service
 from backend.domain import export as export_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
+from backend.domain import remediation as remediation_service
 from backend.domain import review as review_service
 from backend.domain.evidence import verify_chain
 from backend.domain.tenants import resolve_tenant
@@ -40,6 +41,8 @@ from schemas.user_schema import (
     DecisionOut,
     OwnerIn,
     ReassignIn,
+    RemediationAcceptIn,
+    RemediationUpdateIn,
     SignOffIn,
     AnalysisOut,
     FindingOut,
@@ -101,7 +104,7 @@ def _snapshot_out(session: Session, snap: SourceSnapshot) -> SnapshotOut:
     )
 
 
-def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False) -> CampaignOut:
+def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False, actor: str | None = None) -> CampaignOut:
     snaps: List[SnapshotOut] = []
     if with_snapshots:
         rows = session.scalars(
@@ -118,6 +121,7 @@ def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False) -
         reviewer_rule=c.reviewer_rule,
         rule_set_version=c.rule_set_version,
         created_by=c.created_by,
+        is_owner=bool(actor) and review_service.is_owner(c, actor),
         created_at=c.created_at,
         signed_off_by=c.signed_off_by,
         signed_off_at=c.signed_off_at,
@@ -145,18 +149,18 @@ def create_campaign(body: CampaignCreate, ctx: Ctx = Depends(get_ctx)):
         c = campaign_service.create_campaign(ctx.session, ctx.tenant_id, ctx.actor, **body.model_dump())
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    return _campaign_out(ctx.session, c)
+    return _campaign_out(ctx.session, c, actor=ctx.actor)
 
 
 @router.get("", response_model=List[CampaignOut])
 def list_campaigns(ctx: Ctx = Depends(get_ctx)):
     rows = ctx.session.scalars(select(Campaign).order_by(Campaign.created_at.desc()))
-    return [_campaign_out(ctx.session, c) for c in rows]
+    return [_campaign_out(ctx.session, c, actor=ctx.actor) for c in rows]
 
 
 @router.get("/{campaign_id}", response_model=CampaignOut)
 def get_campaign(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
-    return _campaign_out(ctx.session, _load(ctx, campaign_id), with_snapshots=True)
+    return _campaign_out(ctx.session, _load(ctx, campaign_id), with_snapshots=True, actor=ctx.actor)
 
 
 @router.post("/{campaign_id}/sources/hr", response_model=IngestOut, status_code=status.HTTP_201_CREATED)
@@ -366,6 +370,7 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None, mine: bool = F
     links = {l.account_id: l for l in s.scalars(select(IdentityLink).where(IdentityLink.account_id.in_(list(accounts))))}
     findings = {str(f.id): f for f in s.scalars(select(Finding).where(Finding.campaign_id == c.id))}
     decisions = review_service.latest_decisions(s, [i.id for i in items])
+    owner = review_service.is_owner(c, ctx.actor)
 
     out = []
     for i in items:
@@ -387,6 +392,8 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None, mine: bool = F
             decision=_decision_out(decisions[i.id]) if i.id in decisions else None,
             is_mine=bool(me and reviewer and (reviewer.email or "").lower() == me),
             is_own_access=bool(me and ((person and (person.email or "").lower() == me) or (a.email or "").lower() == me)),
+            needs_override=not bool(me and reviewer and (reviewer.email or "").lower() == me),
+            can_decide=bool(me and reviewer and (reviewer.email or "").lower() == me) or owner,
         ))
     if mine:
         out = [o for o in out if o.is_mine]
@@ -400,7 +407,8 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None, mine: bool = F
 
 def _decision_out(d) -> DecisionOut:
     return DecisionOut(id=d.id, action=d.action.value, justification=d.justification, actor=d.actor_id,
-                       decided_at=d.decided_at, channel=d.channel)
+                       decided_at=d.decided_at, channel=d.channel, as_assigned_reviewer=d.as_assigned_reviewer,
+                       override_reason=d.override_reason)
 
 
 @router.post("/{campaign_id}/analyze", response_model=AnalysisOut)
@@ -438,11 +446,11 @@ def _review_errors(fn):
         return fn()
     except campaign_service.InvalidTransition as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    except review_service.SelfReview as exc:
+    except PermissionError as exc:  # self-review, or not the reviewer / campaign owner
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    except review_service.ReviewError as exc:
+    except (review_service.ReviewError, remediation_service.RemediationError, ingest_service.IngestError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
@@ -457,14 +465,16 @@ def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 def decide(campaign_id: uuid.UUID, item_id: uuid.UUID, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
     d = _review_errors(lambda: review_service.decide(
-        ctx.session, c, item_id, ctx.actor, ctx.email, ReviewAction(body.action), body.justification))
+        ctx.session, c, item_id, ctx.actor, ctx.email, ReviewAction(body.action), body.justification,
+        override_reason=body.override_reason))
     return _decision_out(d)
 
 
 @router.post("/{campaign_id}/review-items/bulk-keep")
 def bulk_keep(campaign_id: uuid.UUID, body: BulkKeepIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
-    return _review_errors(lambda: review_service.bulk_keep(ctx.session, c, body.item_ids, ctx.actor, ctx.email))
+    return _review_errors(lambda: review_service.bulk_keep(ctx.session, c, body.item_ids, ctx.actor, ctx.email,
+                                                           body.override_reason))
 
 
 @router.post("/{campaign_id}/review-items/{item_id}/reassign", response_model=ReviewItemOut)
@@ -500,7 +510,7 @@ def set_owner(campaign_id: uuid.UUID, application_id: uuid.UUID, body: OwnerIn, 
 def sign_off(campaign_id: uuid.UUID, body: SignOffIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
     _review_errors(lambda: review_service.sign_off(ctx.session, c, ctx.actor, body.statement))
-    return _campaign_out(ctx.session, c, with_snapshots=True)
+    return _campaign_out(ctx.session, c, with_snapshots=True, actor=ctx.actor)
 
 
 @router.post("/{campaign_id}/evidence-pack")
@@ -521,3 +531,64 @@ def export_evidence_pack(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
             "X-Manifest-SHA256": pack.manifest_sha256,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Remediation
+# ---------------------------------------------------------------------------
+
+
+def _remediations(ctx: Ctx, c: Campaign):
+    from schemas.user_schema import RemediationListOut, RemediationOut
+
+    return RemediationListOut(
+        summary=remediation_service.summary(ctx.session, c),
+        items=[RemediationOut(**{k: v for k, v in r.items() if k in RemediationOut.model_fields})
+               for r in remediation_service.rows(ctx.session, c)],
+    )
+
+
+@router.get("/{campaign_id}/remediations")
+def list_remediations(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    return _remediations(ctx, _load(ctx, campaign_id))
+
+
+@router.post("/{campaign_id}/remediations/verify")
+def verify_remediations(campaign_id: uuid.UUID, application_id: uuid.UUID = Form(...),
+                        file: UploadFile = File(...), ctx: Ctx = Depends(get_ctx)):
+    raw = _read_upload(file)
+    c = _load(ctx, campaign_id)
+    result = _review_errors(lambda: remediation_service.verify_with_upload(
+        ctx.session, c, application_id, raw, file.filename, ctx.actor))
+    return {"result": result, "remediations": _remediations(ctx, c)}
+
+
+@router.post("/{campaign_id}/remediations/{rem_id}")
+def update_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: RemediationUpdateIn,
+                       ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: remediation_service.update(ctx.session, c, rem_id, ctx.actor, status=body.status,
+                                                      ticket_ref=body.ticket_ref, note=body.note))
+    return _remediations(ctx, c)
+
+
+@router.post("/{campaign_id}/remediations/{rem_id}/accept")
+def accept_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: RemediationAcceptIn,
+                       ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: remediation_service.accept(ctx.session, c, rem_id, ctx.actor, body.reason))
+    return _remediations(ctx, c)
+
+
+@router.post("/{campaign_id}/close", response_model=CampaignOut)
+def close_campaign(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: remediation_service.close_campaign(ctx.session, c, ctx.actor))
+    return _campaign_out(ctx.session, c, with_snapshots=True, actor=ctx.actor)
+
+
+@router.get("/{campaign_id}/remediations/tickets.csv")
+def remediation_tickets(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    return Response(content=remediation_service.tickets_csv(ctx.session, c), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="remediation-tickets-{c.id}.csv"'})

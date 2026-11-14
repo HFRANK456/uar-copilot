@@ -1352,3 +1352,107 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
 .events-toggle {
   margin-top: 4px;
 }
+
+.override-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid #f5c58a;
+  background: #fffaf2;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+
+.override-box textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  resize: vertical;
+  min-width: 0;
+}
+
+/* ---------- Remediation ---------- */
+
+.rem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.rem {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rem-open { border-left: 4px solid var(--danger); }
+.rem-done { border-left: 4px solid var(--warning); }
+.rem-verified,
+.rem-accepted { border-left: 4px solid var(--ok); background: #fcfbf8; }
+
+.rem-main {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.rem-pill-open { background: #fde7e9; color: var(--danger); }
+.rem-pill-done { background: #fff3e6; color: var(--warning); }
+.rem-pill-verified,
+.rem-pill-accepted { background: #e6f4ef; color: var(--ok); }
+
+.small-input {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  width: 190px;
+  max-width: 100%;
+}
+
+.verify-box {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: #fcfbf8;
+}
+
+.verify-box h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.verify-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.verify-row select {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.verify-row input[type='file'] {
+  font: inherit;
+  font-size: 0.85rem;
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  .rem-main {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}

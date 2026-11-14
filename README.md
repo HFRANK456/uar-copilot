@@ -54,3 +54,7 @@ The evidence pack contains `report.pdf`, `manifest.json` (SHA-256 of every file 
 the uploaded files byte-for-byte under `population/`, CSVs for column mappings, identities, findings,
 review items and full decision history, `evidence_events.jsonl` (the hash chain) and a `README.txt`
 explaining how to verify it independently.
+
+Who can decide: the item's assigned reviewer, or the campaign owner (its creator) with an `override_reason`
+that is stored on the decision and shown in the evidence pack. Only the owner can reassign, set app owners,
+sign off, manage remediation and close.

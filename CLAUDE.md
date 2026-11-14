@@ -15,7 +15,7 @@ The full PRD ("UAR Copilot — PRD & Technical Blueprint", Nov 10 2026) is in `d
 (its embedded diagrams did not survive export). Its phases: 0 harden prototype → 1 MVP campaign → 2 GA (connectors, Slack/Teams,
 auditor portal, MSP console, AWS) → 3 continuous access monitoring → 4 SOC 2 platform.
 
-## Status (as of 2026-11-14)
+## Status (as of 2026-11-14, evening)
 **Phase 0: done** (PR #1). Fail-closed Auth0, CORS allowlist, pinned deps, tiered privileged
 catalog in rules, grace-period rule, more operators, column-mapping transparency, tests, CI.
 
@@ -30,10 +30,15 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 3 | #4 | Analysis: findings + one review item per account entitlement, reviewer assignment |
 | 4 | #5 | Reviewer queue: start review, keep/revoke/modify with justification rules, bulk keep (low/none only), self-review block, reassign, app owners |
 | 5 | #7 | Sign-off (→ remediating, or closed if nothing changes), evidence pack ZIP (PDF via fpdf2, CSVs, raw uploads, manifest of SHA-256s, jsonl ledger, README on verifying), Campaigns as home page (`/` → `/campaigns`, quick scan at `/scan`), Auth0 sign-in error banner |
+| — | #8, #9 | `/live-check` skill (Claude in Chrome); fix for "Missing Refresh Token" after Auth0 login expiry (refresh-token fallback + redirect to sign in). Auth0 API now has Allow Offline Access on |
+| 6 | #10 | Reviewer authority (assigned reviewer decides; campaign owner = creator may decide instead with a recorded override reason; others 403; owner-only reassign/app owners/sign-off/remediation/close) and remediation (created at sign-off from revoke/modify; Jira-importable tickets CSV; ticket + mark done; verify by re-uploading an access list (`verification` snapshots, not campaign data); accept with reason; close → `closed`); pack adds remediations.csv and override columns |
 
 **Phase 1 remaining, in the recommended order:**
-- B. Remediation (next): tickets (email/Jira) for revoke/modify decisions; campaigns already land in
-  `remediating` after sign-off and need remediating → verifying → closed, with verification by re-upload.
+- B2. Send tickets to Jira / email directly (needs the user's Jira site + API token or an email
+  provider; ask which). Today tickets are a Jira-importable CSV.
+- Reviewer access: assigned reviewers can only decide if they can sign in to the same tenant. Personal
+  tenants (no Auth0 org) mean other people can't see the campaign yet; needs Auth0 Organizations or
+  invites before real reviewers can use it.
 - C. Agent recommendations: Claude drafts keep/revoke + rationale citing finding IDs; schema-validated.
 - D. Reminders and escalation (email) to reviewers.
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
@@ -45,9 +50,9 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `rules.py` + `rule_registry.py` (versioned rules, `RULE_SET_VERSION`), `mapping.py` (column
   mapper), `privileged_access_catalog.py`, `db/models.py`, `db/session.py` (`tenant_session` sets
   `app.tenant_id` with SET LOCAL), `domain/` (`campaigns`, `evidence`, `ingest`, `identity`,
-  `analysis`, `review` (incl. sign-off), `export` (evidence pack), `tenants`), `api/campaigns.py` (all `/campaigns` routes).
+  `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack), `tenants`), `api/campaigns.py` (all `/campaigns` routes).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
-- **Migrations**: `backend/migrations/versions/0001..0003` (slice 5 added no migration). Run automatically at startup when
+- **Migrations**: `backend/migrations/versions/0001..0004`. Run automatically at startup when
   `DATABASE_URL` is set (`RUN_MIGRATIONS=false` opts out). Create new ones with
   `cd backend && alembic revision --autogenerate --rev-id 000N -m "..."`, then `alembic check`.
 - **Frontend**: React 19 + Vite + TS in `frontend/uar-ui/`. `src/App.tsx` (nav, routes, Quick scan
@@ -101,7 +106,8 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   Playwright. This caught a real bug (CORS lacked PUT).
 - Sample data for a full campaign: `data/sample_hr_roster.csv`, `data/sample_app_access_aws.csv`,
   `data/sample_app_access_github.csv`. With all three: 11 accounts, 4 queued identities, 12 review
-  items (1 critical: terminated Jordan Kim with AWS admin).
+  items (1 critical: terminated Jordan Kim with AWS admin). `data/sample_app_access_aws_after_remediation.csv`
+  is a later AWS export (Jordan removed, contractor still present) for testing verification.
 - **Live checks**: cloud sessions can't reach the live backend (sandbox blocks `onrender.com`) or the
   user's browser. After each merge that changes something user-visible, check the Render deploy
   logs, then tell the user the exact command to run in a **Claude desktop app session with Claude in

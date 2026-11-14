@@ -21,6 +21,9 @@ from backend.domain import ingest
 from backend.domain.evidence import verify_chain
 from tests.conftest import DATA
 
+# The tests act as the campaign owner, who decides for reviewers with a recorded reason.
+OVR = "Test run: owner deciding for reviewers"
+
 
 def _new_campaign(engine, tenant_id, name="Q4 2026 UAR"):
     with tenant_session(tenant_id, engine) as s:
@@ -515,23 +518,23 @@ def test_review_decision_rules(api):
     jordan = ("AWS", "jordan.kim", "AdministratorAccess")
 
     # Keeping critical access needs a real justification.
-    assert api.post(url(jordan), json={"action": "keep"}).status_code == 422
-    assert api.post(url(jordan), json={"action": "keep", "justification": "ok"}).status_code == 422
+    assert api.post(url(jordan), json={"override_reason": OVR, "action": "keep"}).status_code == 422
+    assert api.post(url(jordan), json={"override_reason": OVR, "action": "keep", "justification": "ok"}).status_code == 422
     # Modify must say what changes.
-    assert api.post(url(jordan), json={"action": "modify"}).status_code == 422
+    assert api.post(url(jordan), json={"override_reason": OVR, "action": "modify"}).status_code == 422
     # Revoke needs nothing.
-    r = api.post(url(jordan), json={"action": "revoke"})
+    r = api.post(url(jordan), json={"override_reason": OVR, "action": "revoke"})
     assert r.status_code == 200 and r.json()["action"] == "revoke" and r.json()["actor"] == "grc@acme.io"
 
     # Changing a decision adds a new one; the latest wins.
-    r = api.post(url(jordan), json={"action": "keep", "justification": "Break-glass account approved by CISO, ticket SEC-12"})
+    r = api.post(url(jordan), json={"override_reason": OVR, "action": "keep", "justification": "Break-glass account approved by CISO, ticket SEC-12"})
     assert r.status_code == 200
     after = _items(api, cid)[jordan]
     assert after["status"] == "keep" and after["decision"]["justification"].startswith("Break-glass")
 
     # Low-risk items can be kept without justification.
     pshah = ("GitHub", "pshah", "admin")
-    assert api.post(url(pshah), json={"action": "keep"}).status_code == 200
+    assert api.post(url(pshah), json={"override_reason": OVR, "action": "keep"}).status_code == 200
 
     progress = api.get(f"/campaigns/{cid}/review-items").json()["progress"]
     assert progress["decided"] == 2 and progress["by_action"]["keep"] == 2 and not progress["complete"]
@@ -546,7 +549,7 @@ def test_decisions_are_append_only(db_engine, api):
     cid = _review_campaign(api)
     api.post(f"/campaigns/{cid}/review/start")
     item = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
-    api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json={"action": "revoke"})
+    api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json={"override_reason": OVR, "action": "revoke"})
     with pytest.raises(DBAPIError, match="append-only"):
         with tenant_session(_tenant_of(db_engine, cid), db_engine) as s:
             s.execute(text("update decision set action = 'keep'"))
@@ -573,11 +576,11 @@ def test_bulk_keep_refuses_risky_items(api):
     risky = [i["id"] for i in items if i["severity"] in ("critical", "high", "medium")]
     safe = [i["id"] for i in items if i["severity"] in ("none", "low")]
 
-    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe + risky[:1]})
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"override_reason": OVR, "item_ids": safe + risky[:1]})
     assert r.status_code == 422 and "one at a time" in r.json()["detail"]
     assert api.get(f"/campaigns/{cid}/review-items").json()["progress"]["decided"] == 0  # all-or-nothing
 
-    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe})
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"override_reason": OVR, "item_ids": safe})
     assert r.status_code == 200 and r.json()["decided"] == len(safe)
     progress = api.get(f"/campaigns/{cid}/review-items").json()["progress"]
     assert progress["pending"] == len(risky) == progress["high_risk_pending"] + sum(
@@ -640,11 +643,11 @@ def test_reassign_and_app_owner(api):
 def _decide_all(api, cid):
     for key, item in _items(api, cid).items():
         if item["severity"] == "critical":
-            body = {"action": "revoke"}
+            body = {"override_reason": OVR, "action": "revoke"}
         elif item["severity"] in ("high",):
-            body = {"action": "keep", "justification": "On-call admin approved by CISO, SEC-12"}
+            body = {"override_reason": OVR, "action": "keep", "justification": "On-call admin approved by CISO, SEC-12"}
         else:
-            body = {"action": "keep"}
+            body = {"override_reason": OVR, "action": "keep"}
         r = api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json=body)
         assert r.status_code == 200, r.text
 
@@ -671,7 +674,7 @@ def test_sign_off_with_everything_kept_closes(api):
     cid = _review_campaign(api)
     api.post(f"/campaigns/{cid}/review/start")
     for item in _items(api, cid).values():
-        body = {"action": "keep", "justification": "Business need confirmed with the manager"}
+        body = {"override_reason": OVR, "action": "keep", "justification": "Business need confirmed with the manager"}
         assert api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json=body).status_code == 200
     assert api.post(f"/campaigns/{cid}/sign-off", json={}).json()["state"] == "closed"
 
@@ -695,7 +698,7 @@ def test_evidence_pack_contents_and_verification(api):
     _decide_all(api, cid)
     # Change one decision so the history shows a superseded row.
     pshah = _items(api, cid)[("GitHub", "pshah", "admin")]
-    api.post(f"/campaigns/{cid}/review-items/{pshah['id']}/decision", json={"action": "revoke"})
+    api.post(f"/campaigns/{cid}/review-items/{pshah['id']}/decision", json={"override_reason": OVR, "action": "revoke"})
     api.post(f"/campaigns/{cid}/sign-off", json={})
 
     r = api.post(f"/campaigns/{cid}/evidence-pack")
@@ -770,3 +773,179 @@ def test_pdf_handles_non_latin_names():
 
     assert _latin1("Zoë Ångström → done") == "Zoë Ångström -> done"
     assert _latin1("名前") == "??"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer authority
+# ---------------------------------------------------------------------------
+
+
+def _started(api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    return cid
+
+
+def test_assigned_reviewer_decides_without_override(api):
+    cid = _started(api)
+    jordan = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
+    assert jordan["reviewer"]["name"] == "Priya Shah"
+    api.principal["email"] = "priya.shah@acme.io"  # the assigned reviewer signs in
+    mine = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
+    assert mine["is_mine"] and not mine["needs_override"] and mine["can_decide"]
+    r = api.post(f"/campaigns/{cid}/review-items/{jordan['id']}/decision", json={"action": "revoke"})
+    assert r.status_code == 200, r.text
+    assert r.json()["as_assigned_reviewer"] is True and r.json()["override_reason"] is None
+    ev = [e for e in api.get(f"/campaigns/{cid}/evidence").json()["events"] if e["type"] == "review.decided"][-1]
+    assert ev["payload"]["as_assigned_reviewer"] is True and ev["payload"]["assigned_reviewer"] == "priya.shah@acme.io"
+
+
+def test_owner_needs_override_reason_and_others_are_refused(api):
+    cid = _started(api)
+    items = _items(api, cid)
+    jordan = items[("AWS", "jordan.kim", "AdministratorAccess")]
+    url = f"/campaigns/{cid}/review-items/{jordan['id']}/decision"
+    assert jordan["needs_override"] and jordan["can_decide"]  # the owner, not the reviewer
+
+    r = api.post(url, json={"action": "revoke"})
+    assert r.status_code == 422 and "override reason" in r.json()["detail"] and "Priya Shah" in r.json()["detail"]
+    assert api.post(url, json={"action": "revoke", "override_reason": "short"}).status_code == 422
+    r = api.post(url, json={"action": "revoke", "override_reason": "Priya on leave; approved by CISO"})
+    assert r.status_code == 200
+    assert r.json()["as_assigned_reviewer"] is False and r.json()["override_reason"].startswith("Priya on leave")
+
+    # Someone who is neither the reviewer nor the owner can't decide or run the campaign.
+    api.principal["email"] = "marcus.lee@acme.io"
+    other = _items(api, cid)[("AWS", "priya.shah", "AdministratorAccess")]
+    assert other["can_decide"] is False
+    r = api.post(f"/campaigns/{cid}/review-items/{other['id']}/decision",
+                 json={"action": "revoke", "override_reason": "I would like to decide this one"})
+    assert r.status_code == 403 and "assigned reviewer (Dana Reyes)" in r.json()["detail"]
+    people = {p["name"]: p["id"] for p in api.get(f"/campaigns/{cid}/people").json()}
+    assert api.post(f"/campaigns/{cid}/review-items/{other['id']}/reassign",
+                    json={"person_id": people["Sam Ortiz"]}).status_code == 403
+    assert api.post(f"/campaigns/{cid}/sign-off", json={}).status_code == 403
+    assert api.get(f"/campaigns/{cid}").json()["is_owner"] is False
+
+
+def test_bulk_keep_by_owner_needs_one_reason(api):
+    cid = _started(api)
+    safe = [i["id"] for i in _items(api, cid).values() if i["severity"] in ("none", "low")]
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe})
+    assert r.status_code == 422 and "override reason" in r.json()["detail"]
+    r = api.post(f"/campaigns/{cid}/review-items/bulk-keep", json={"item_ids": safe, "override_reason": OVR})
+    assert r.status_code == 200 and r.json()["decided"] == len(safe)
+    assert api.get(f"/campaigns/{cid}/review-items").json()["progress"]["decided_by_owner_override"] == len(safe)
+
+
+# ---------------------------------------------------------------------------
+# Remediation
+# ---------------------------------------------------------------------------
+
+
+AWS_AFTER = (
+    "UserName,Email Address,Account Status,Permission Set,Last Sign In\n"
+    "priya.shah,priya.shah@acme.io,Enabled,AdministratorAccess,2026-11-20\n"
+    "marcus.lee,marcus.lee@acme.io,Enabled,PowerUserAccess,2026-11-20\n"
+    "marcus.lee,marcus.lee@acme.io,Enabled,ReadOnlyAccess,2026-11-20\n"
+    "svc-deploy,,Enabled,DeployRole,2026-11-20\n"
+    "alex.chen,alex.chen@acme.io,Disabled,BillingReadOnly,2026-11-07\n"
+    "contractor.ext,j.doe@vendor.example,Enabled,ReadOnlyAccess,2026-06-01\n"
+)  # jordan.kim removed; the contractor's revoke was NOT done
+
+
+def _signed_off(api):
+    cid = _started(api)
+    _decide_all(api, cid)  # revokes the critical item (Jordan)
+    contractor = _items(api, cid)[("AWS", "contractor.ext", "ReadOnlyAccess")]
+    api.post(f"/campaigns/{cid}/review-items/{contractor['id']}/decision",
+             json={"action": "revoke", "override_reason": OVR})
+    ghost = _items(api, cid)[("GitHub", "ghost-user", "write")]
+    api.post(f"/campaigns/{cid}/review-items/{ghost['id']}/decision",
+             json={"action": "modify", "justification": "Downgrade to read access only", "override_reason": OVR})
+    assert api.post(f"/campaigns/{cid}/sign-off", json={}).json()["state"] == "remediating"
+    return cid
+
+
+def test_remediation_lifecycle(api):
+    import csv
+    import io
+    import json
+
+    cid = _signed_off(api)
+    rem = api.get(f"/campaigns/{cid}/remediations").json()
+    assert rem["summary"]["total"] == 3 and rem["summary"]["open"] == 3 and not rem["summary"]["ready_to_close"]
+    by_acct = {r["account"]: r for r in rem["items"]}
+    assert by_acct["jordan.kim"]["action"] == "revoke" and by_acct["ghost-user"]["action"] == "modify"
+    assert by_acct["ghost-user"]["change"] == "Downgrade to read access only"
+
+    # Tickets CSV for Jira import.
+    t = api.get(f"/campaigns/{cid}/remediations/tickets.csv")
+    tickets = list(csv.DictReader(io.StringIO(t.text)))
+    assert t.status_code == 200 and len(tickets) == 3
+    jt = next(x for x in tickets if "jordan.kim" in x["Summary"])
+    assert jt["Summary"] == "Remove AdministratorAccess for jordan.kim in AWS" and jt["Priority"] == "Highest"
+
+    # Record the ticket and that IT made the change.
+    r = api.post(f"/campaigns/{cid}/remediations/{by_acct['jordan.kim']['id']}",
+                 json={"ticket_ref": "IT-101", "status": "done", "note": "Removed in IAM Identity Center"})
+    assert r.status_code == 200
+    assert {x["account"]: x for x in r.json()["items"]}["jordan.kim"]["status"] == "done"
+    assert api.post(f"/campaigns/{cid}/remediations/{by_acct['jordan.kim']['id']}",
+                    json={"status": "verified"}).status_code == 422  # can't self-verify
+
+    # Can't close yet.
+    r = api.post(f"/campaigns/{cid}/close")
+    assert r.status_code == 422 and "3 remediation(s)" in r.json()["detail"]
+
+    # Verify with a later AWS export: Jordan's access is gone, the contractor's isn't.
+    aws = next(a for a in api.get(f"/campaigns/{cid}/applications").json() if a["name"] == "AWS")
+    r = api.post(f"/campaigns/{cid}/remediations/verify", data={"application_id": aws["id"]},
+                 files={"file": ("aws_after.csv", AWS_AFTER.encode())})
+    assert r.status_code == 200, r.text
+    res = {x["account"]: x for x in r.json()["result"]["results"]}
+    assert res["jordan.kim"]["verified"] is True and res["contractor.ext"]["verified"] is False
+    assert res["contractor.ext"]["detail"] == "entitlement still held"
+    items = {x["account"]: x for x in r.json()["remediations"]["items"]}
+    assert items["jordan.kim"]["status"] == "verified" and items["jordan.kim"]["verification_method"] == "reupload"
+    assert items["contractor.ext"]["status"] == "open"
+
+    # The verification upload doesn't become campaign data.
+    assert len(api.get(f"/campaigns/{cid}/identities").json()["items"]) == 11
+
+    # Accept the other two with reasons, then close.
+    assert api.post(f"/campaigns/{cid}/remediations/{items['contractor.ext']['id']}/accept",
+                    json={"reason": "ok"}).status_code == 422
+    for acct in ("contractor.ext", "ghost-user"):
+        r = api.post(f"/campaigns/{cid}/remediations/{items[acct]['id']}/accept",
+                     json={"reason": "Vendor offboarded; confirmed by email from vendor, ticket IT-102"})
+        assert r.status_code == 200
+    assert api.get(f"/campaigns/{cid}/remediations").json()["summary"]["ready_to_close"] is True
+    r = api.post(f"/campaigns/{cid}/close")
+    assert r.status_code == 200 and r.json()["state"] == "closed"
+    assert api.post(f"/campaigns/{cid}/remediations/{items['jordan.kim']['id']}/accept",
+                    json={"reason": "too late, campaign closed"}).status_code == 409
+
+    ev = [e["type"] for e in api.get(f"/campaigns/{cid}/evidence").json()["events"]]
+    for t_ in ("remediation.updated", "remediation.verification_upload", "remediation.accepted", "campaign.closed"):
+        assert t_ in ev
+    assert api.get(f"/campaigns/{cid}/evidence").json()["verification"]["valid"]
+
+    # The evidence pack carries remediation and the verification upload.
+    files = _unzip(api.post(f"/campaigns/{cid}/evidence-pack").content)
+    rem_rows = list(csv.DictReader(io.StringIO(files["remediations.csv"].decode())))
+    assert {r["account"]: r["status"] for r in rem_rows} == {
+        "jordan.kim": "verified", "contractor.ext": "accepted", "ghost-user": "accepted"}
+    assert any(n.endswith("aws_after.csv") for n in files)
+    decisions = list(csv.DictReader(io.StringIO(files["decisions.csv"].decode())))
+    assert all(d["decided_by_assigned_reviewer"] == "False" and d["override_reason"] == OVR for d in decisions)
+    manifest = json.loads(files["manifest.json"])
+    assert manifest["campaign"]["state"] == "closed"
+
+
+def test_remediation_is_owner_only(api):
+    cid = _signed_off(api)
+    rid = api.get(f"/campaigns/{cid}/remediations").json()["items"][0]["id"]
+    api.principal["email"] = "marcus.lee@acme.io"
+    assert api.post(f"/campaigns/{cid}/remediations/{rid}", json={"status": "done"}).status_code == 403
+    assert api.post(f"/campaigns/{cid}/close").status_code == 403
