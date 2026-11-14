@@ -79,6 +79,7 @@ class AccountType(str, enum.Enum):
 class SourceKind(str, enum.Enum):
     access_list = "access_list"
     hr_roster = "hr_roster"
+    verification = "verification"  # a later access list used only to confirm remediation
 
 
 class ReviewAction(str, enum.Enum):
@@ -322,15 +323,34 @@ class Decision(TenantOwned, Base):
     justification: Mapped[Optional[str]] = mapped_column(Text)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     channel: Mapped[str] = mapped_column(String(50), default="web")
+    # Who the item was assigned to when this was decided, and whether that person decided it.
+    assigned_reviewer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("person.id", ondelete="SET NULL")
+    )
+    as_assigned_reviewer: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Required when the campaign owner decides instead of the assigned reviewer (or no one is assigned).
+    override_reason: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Remediation(TenantOwned, Base):
     __tablename__ = "remediation"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaign.id", ondelete="CASCADE"), index=True
+    )
+    review_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("review_item.id", ondelete="CASCADE")
+    )
     decision_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("decision.id", ondelete="CASCADE"))
+    action: Mapped[Optional[str]] = mapped_column(String(20))  # revoke | modify
     ticket_ref: Mapped[Optional[str]] = mapped_column(String(255))
+    # open -> done (IT says it's changed) -> verified (a later upload confirms) ; or accepted (with reason)
     status: Mapped[str] = mapped_column(String(50), default="open")
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(255))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    verification_method: Mapped[Optional[str]] = mapped_column(String(50))  # reupload | accepted
     verified_snapshot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("source_snapshot.id", ondelete="SET NULL")
     )

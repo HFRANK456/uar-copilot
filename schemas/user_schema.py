@@ -95,6 +95,7 @@ class CampaignOut(BaseModel):
     rule_set_version: Optional[str]
     created_by: Optional[str]
     created_at: Optional[_datetime]
+    is_owner: bool = False
     signed_off_by: Optional[str] = None
     signed_off_at: Optional[_datetime] = None
     snapshots: List[SnapshotOut] = Field(default_factory=list)
@@ -194,6 +195,8 @@ class ReviewItemOut(BaseModel):
     decision: Optional["DecisionOut"] = None
     is_mine: bool = False
     is_own_access: bool = False
+    needs_override: bool = False  # the signed-in user would be deciding instead of the assigned reviewer
+    can_decide: bool = True
 
 
 class DecisionOut(BaseModel):
@@ -203,6 +206,8 @@ class DecisionOut(BaseModel):
     actor: str
     decided_at: _datetime
     channel: str
+    as_assigned_reviewer: bool = False
+    override_reason: Optional[str] = None
 
 
 class AnalysisOut(BaseModel):
@@ -214,10 +219,47 @@ class AnalysisOut(BaseModel):
 class DecisionIn(BaseModel):
     action: str = Field(pattern="^(keep|revoke|modify)$")
     justification: Optional[str] = Field(default=None, max_length=2000)
+    override_reason: Optional[str] = Field(default=None, max_length=2000)
 
 
 class BulkKeepIn(BaseModel):
     item_ids: List[_UUID] = Field(min_length=1, max_length=1000)
+    override_reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class RemediationOut(BaseModel):
+    id: _UUID
+    status: str
+    action: Optional[str]
+    severity: Optional[str]
+    application: Optional[str]
+    application_id: Optional[_UUID]
+    account: Optional[str]
+    entitlement: Optional[str]
+    person: Optional[str]
+    change: Optional[str]
+    decided_by: Optional[str]
+    ticket_ref: Optional[str]
+    note: Optional[str]
+    resolved_by: Optional[str]
+    resolved_at: Optional[_datetime]
+    verified_at: Optional[_datetime]
+    verification_method: Optional[str]
+
+
+class RemediationListOut(BaseModel):
+    summary: Dict[str, Any]
+    items: List[RemediationOut]
+
+
+class RemediationUpdateIn(BaseModel):
+    status: Optional[str] = Field(default=None, pattern="^done$")
+    ticket_ref: Optional[str] = Field(default=None, max_length=255)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class RemediationAcceptIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class ReassignIn(BaseModel):

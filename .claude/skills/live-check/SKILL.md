@@ -16,7 +16,8 @@ to confirm a change works on the real site with real sign-in, and to report exac
   the user to sign in in that tab, wait for them to say they're done, then continue.
 - Don't delete anything, and don't change any campaign other than the one this check is about.
 - Sample files live in this repo's `data/` folder: `sample_hr_roster.csv`,
-  `sample_app_access_aws.csv`, `sample_app_access_github.csv`. If you can't attach files to a
+  `sample_app_access_aws.csv`, `sample_app_access_github.csv`, and for remediation
+  `sample_app_access_aws_after_remediation.csv`. If you can't attach files to a
   file input yourself, ask the user to choose the named file in the open dialog, then continue.
 
 ## What to run
@@ -38,17 +39,27 @@ to confirm a change works on the real site with real sign-in, and to report exac
    → "Every account is resolved."
 6. **Run analysis** → 12 review items: 1 critical (Jordan Kim, AWS AdministratorAccess,
    terminated), 1 high (Priya Shah), 2 medium, 1 low, 7 with no findings.
-7. **Start review**. On the critical item click **Keep**: a justification box must appear and its
-   button must stay disabled under 10 characters. Cancel, then **Revoke**. On the high item, Keep
-   with the justification "Live check: on-call admin approved". Under **All**, use
-   **Keep N low-risk items shown**. Decide the two medium items one at a time (Revoke).
-   → "12 of 12 decided".
-8. **Sign off campaign** with the attestation "Live check". → notice "Signed off by …", state badge
-   **Remediating**, and the Keep/Revoke buttons disappear.
-9. **Download evidence pack** → a file `evidence-Live_check_….zip` downloads and the message
-   "Downloaded …" appears. **Show events**: the newest event is `evidence.exported`, and the header
-   says "Hash chain verified".
-10. Open **Quick scan** in the nav: the page must say "Nothing is saved".
+7. **Start review**. You're the campaign owner, not the assigned reviewer, so each item says
+   "To decide it yourself, add an override reason". Check that, then type
+   "Live check: owner deciding for reviewers" in the **Deciding for reviewers?** box.
+   On the critical item click **Keep**: a justification box must appear and its button must stay
+   disabled under 10 characters. Cancel, then **Revoke**; the decision must say
+   "(campaign owner)" and show the override reason. On the high item, Keep with the justification
+   "Live check: on-call admin approved". Under **All**, use **Keep N low-risk items shown**.
+   Revoke the AWS medium item (contractor.ext); **Modify…** the GitHub medium item (ghost-user)
+   with "Downgrade to read access only". → "12 of 12 decided".
+8. **Sign off campaign** with the attestation "Live check". → state badge **Remediating**, the
+   Keep/Revoke buttons disappear, and a **Remediation** section shows "0 of 3 confirmed".
+9. **Remediation**: **Download tickets (CSV for Jira import)** downloads a CSV. On jordan.kim, enter
+   ticket `IT-101`, **Save ticket**, **Mark done** → "Done, not verified". In **Verify with a fresh
+   access list**, choose **AWS** and `data/sample_app_access_aws_after_remediation.csv`, then
+   **Check changes** → "AWS: 1 of 2 change(s) confirmed" and "Still there: contractor.ext …";
+   jordan.kim shows **Verified**. **Close campaign** must still be disabled. Then **Accept without
+   upload…** on contractor.ext and ghost-user with the reason "Live check: removal confirmed by the
+   vendor by email" → "3 of 3 confirmed". **Close campaign** → badge **Closed**.
+10. **Download evidence pack** → a file `evidence-Live_check_….zip` downloads. **Show events**:
+   the newest event is `evidence.exported`, and the header says "Hash chain verified".
+11. Open **Quick scan** in the nav: the page must say "Nothing is saved".
 
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any

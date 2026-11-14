@@ -49,6 +49,37 @@ class SelfReview(PermissionError):
     pass
 
 
+class NotAuthorized(PermissionError):
+    pass
+
+
+def is_owner(campaign: Campaign, actor: str) -> bool:
+    """The campaign owner is whoever created it; they run the campaign and can act for reviewers."""
+    return bool(actor) and campaign.created_by == actor
+
+
+def require_owner(campaign: Campaign, actor: str, what: str) -> None:
+    if not is_owner(campaign, actor):
+        raise NotAuthorized(f"only the campaign owner ({campaign.created_by}) can {what}")
+
+
+def authority(session: Session, campaign: Campaign, item: ReviewItem, actor: str,
+              actor_email: Optional[str]) -> tuple[bool, Optional[Person]]:
+    """Return (deciding as the assigned reviewer?, the assigned reviewer).
+
+    The assigned reviewer decides normally. The campaign owner may decide any item
+    on the reviewer's behalf, or an unassigned item, but must give an override reason.
+    Anyone else may not decide.
+    """
+    reviewer = session.get(Person, item.reviewer_id) if item.reviewer_id else None
+    if reviewer is not None and _norm(reviewer.email) and _norm(reviewer.email) == _norm(actor_email):
+        return True, reviewer
+    if is_owner(campaign, actor):
+        return False, reviewer
+    who = (reviewer.name or reviewer.email) if reviewer else "nobody yet"
+    raise NotAuthorized(f"only the assigned reviewer ({who}) or the campaign owner can decide this item")
+
+
 def _norm(email: Optional[str]) -> Optional[str]:
     return email.strip().lower() if email else None
 
@@ -74,6 +105,14 @@ def _subject(session: Session, item: ReviewItem) -> tuple[Account, Entitlement, 
     return account, entitlement, person
 
 
+def _is_own_access(session: Session, item: ReviewItem, actor_email: Optional[str]) -> bool:
+    me = _norm(actor_email)
+    if not me:
+        return False
+    account, _, person = _subject(session, item)
+    return bool((person is not None and _norm(person.email) == me) or _norm(account.email) == me)
+
+
 def _load_item(session: Session, campaign: Campaign, item_id: uuid.UUID) -> ReviewItem:
     item = session.scalar(select(ReviewItem).where(ReviewItem.id == item_id, ReviewItem.campaign_id == campaign.id))
     if item is None:
@@ -96,6 +135,7 @@ def decide(
     justification: Optional[str] = None,
     channel: str = "web",
     bulk: bool = False,
+    override_reason: Optional[str] = None,
 ) -> Decision:
     _require_in_review(campaign)
     if action not in DECIDABLE:
@@ -103,10 +143,17 @@ def decide(
     item = _load_item(session, campaign, item_id)
     account, entitlement, person = _subject(session, item)
 
-    if person is not None and _norm(person.email) and _norm(person.email) == _norm(actor_email):
+    if _is_own_access(session, item, actor_email):
         raise SelfReview("you cannot review your own access")
-    if account.email and _norm(account.email) == _norm(actor_email):
-        raise SelfReview("you cannot review your own access")
+
+    as_reviewer, reviewer = authority(session, campaign, item, actor, actor_email)
+    override_reason = (override_reason or "").strip() or None
+    if as_reviewer:
+        override_reason = None
+    elif not override_reason or len(override_reason) < MIN_JUSTIFICATION:
+        who = f"the assigned reviewer ({reviewer.name or reviewer.email})" if reviewer else "an assigned reviewer"
+        raise ReviewError(f"you are deciding instead of {who}; give an override reason of at least "
+                          f"{MIN_JUSTIFICATION} characters")
 
     justification = (justification or "").strip() or None
     if action == ReviewAction.keep and item.severity in JUSTIFY_KEEP and (
@@ -124,6 +171,9 @@ def decide(
         action=action,
         justification=justification,
         channel=channel,
+        assigned_reviewer_id=reviewer.id if reviewer else None,
+        as_assigned_reviewer=as_reviewer,
+        override_reason=override_reason,
         created_by=actor,
     )
     session.add(decision)
@@ -147,6 +197,9 @@ def decide(
             "finding_ids": item.finding_ids,
             "bulk": bulk,
             "channel": channel,
+            "assigned_reviewer": (reviewer.email or reviewer.name) if reviewer else None,
+            "as_assigned_reviewer": as_reviewer,
+            "override_reason": override_reason,
         },
         actor,
     )
@@ -154,9 +207,14 @@ def decide(
 
 
 def bulk_keep(
-    session: Session, campaign: Campaign, item_ids: Iterable[uuid.UUID], actor: str, actor_email: Optional[str]
+    session: Session, campaign: Campaign, item_ids: Iterable[uuid.UUID], actor: str, actor_email: Optional[str],
+    override_reason: Optional[str] = None,
 ) -> Dict[str, object]:
-    """Keep many low-risk items at once. Refuses the whole batch if any item isn't eligible."""
+    """Keep many low-risk items at once. Refuses the whole batch if any item isn't eligible.
+
+    Items the actor isn't the assigned reviewer for need the campaign owner and one
+    override reason, recorded on each decision. The actor's own access is skipped.
+    """
     _require_in_review(campaign)
     ids = list(dict.fromkeys(item_ids))
     if not ids:
@@ -165,10 +223,19 @@ def bulk_keep(
     blocked = [str(i.id) for i in items if i.severity not in BULK_SEVERITIES]
     if blocked:
         raise ReviewError(f"{len(blocked)} item(s) have medium or higher findings and must be decided one at a time")
+    reason = (override_reason or "").strip()
+    for item in items:  # check the whole batch before changing anything
+        if _is_own_access(session, item, actor_email):
+            continue  # skipped below, never decided by the person it belongs to
+        as_reviewer, _ = authority(session, campaign, item, actor, actor_email)
+        if not as_reviewer and len(reason) < MIN_JUSTIFICATION:
+            raise ReviewError("some of these items aren't assigned to you; give an override reason of at least "
+                              f"{MIN_JUSTIFICATION} characters")
     decided, skipped_self = 0, []
     for item in items:
         try:
-            decide(session, campaign, item.id, actor, actor_email, ReviewAction.keep, bulk=True)
+            decide(session, campaign, item.id, actor, actor_email, ReviewAction.keep, bulk=True,
+                   override_reason=reason or None)
             decided += 1
         except SelfReview:
             skipped_self.append(str(item.id))
@@ -176,6 +243,7 @@ def bulk_keep(
 
 
 def reassign(session: Session, campaign: Campaign, item_id: uuid.UUID, person_id: uuid.UUID, actor: str) -> ReviewItem:
+    require_owner(campaign, actor, "reassign reviewers")
     if campaign.state not in (CampaignState.analyzing, CampaignState.in_review):
         raise InvalidTransition(f"cannot reassign in state {campaign.state.value}")
     item = _load_item(session, campaign, item_id)
@@ -198,6 +266,7 @@ def reassign(session: Session, campaign: Campaign, item_id: uuid.UUID, person_id
 def set_app_owner(session: Session, campaign: Campaign, application_id: uuid.UUID, person_id: Optional[uuid.UUID],
                   actor: str) -> Dict[str, object]:
     """Set an application's owner and hand them that app's unassigned items (never their own)."""
+    require_owner(campaign, actor, "set application owners")
     app = session.get(Application, application_id)
     if app is None:
         raise LookupError("application not found")
@@ -228,6 +297,11 @@ def latest_decisions(session: Session, item_ids: List[uuid.UUID]) -> Dict[uuid.U
     return out
 
 
+def _override_count(session: Session, items: List[ReviewItem]) -> int:
+    latest = latest_decisions(session, [i.id for i in items])
+    return sum(1 for d in latest.values() if not d.as_assigned_reviewer)
+
+
 def review_progress(session: Session, campaign: Campaign) -> Dict[str, object]:
     items = list(session.scalars(select(ReviewItem).where(ReviewItem.campaign_id == campaign.id)))
     status = Counter(i.status for i in items)
@@ -241,6 +315,7 @@ def review_progress(session: Session, campaign: Campaign) -> Dict[str, object]:
         "high_risk_pending": high_pending,
         "by_action": {a: status.get(a, 0) for a in ("keep", "revoke", "modify")},
         "unassigned": sum(1 for i in items if i.reviewer_id is None),
+        "decided_by_owner_override": _override_count(session, items),
         "complete": total > 0 and pending == 0,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
@@ -253,6 +328,7 @@ def sign_off(session: Session, campaign: Campaign, actor: str, statement: Option
     Remediating (the changes still have to be made and verified); campaigns
     where everything was kept close straight away.
     """
+    require_owner(campaign, actor, "sign off the campaign")
     _require_in_review(campaign)
     progress = review_progress(session, campaign)
     if not progress["complete"]:
@@ -270,4 +346,8 @@ def sign_off(session: Session, campaign: Campaign, actor: str, statement: Option
         actor,
     )
     transition(session, campaign, CampaignState.remediating if changes else CampaignState.closed, actor)
+    if changes:
+        from backend.domain.remediation import create_for_campaign
+
+        create_for_campaign(session, campaign, actor)
     return {"state": campaign.state.value, "changes_to_remediate": changes}

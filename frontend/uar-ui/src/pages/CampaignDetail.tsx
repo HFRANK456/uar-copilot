@@ -6,6 +6,9 @@ import {
   useDownload,
   type Analysis,
   type Application,
+  type Remediation,
+  type RemediationList,
+  type VerifyResult,
   type ReviewItem,
   type Campaign,
   type Evidence,
@@ -112,7 +115,8 @@ export default function CampaignDetailPage() {
       {error && <div className="error">{error}</div>}
 
       <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} reviewDone={Boolean(analysis?.progress?.complete)}
-        signedOff={Boolean(campaign.signed_off_at)} exported={Boolean(evidence?.events.some((e) => e.type === 'evidence.exported'))} />
+        signedOff={Boolean(campaign.signed_off_at)} exported={Boolean(evidence?.events.some((e) => e.type === 'evidence.exported'))}
+        closed={campaign.state === 'closed'} />
 
       <SourcesSection campaign={campaign} onChange={refresh} />
 
@@ -125,6 +129,10 @@ export default function CampaignDetailPage() {
       />
 
       <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} people={people} onChange={refresh} />
+
+      {['remediating', 'verifying', 'closed'].includes(campaign.state) && (
+        <RemediationSection campaign={campaign} onChange={refresh} />
+      )}
 
       <EvidenceSection campaign={campaign} evidence={evidence} onChange={refresh} />
     </div>
@@ -141,6 +149,7 @@ function Steps({
   reviewDone,
   signedOff,
   exported,
+  closed,
 }: {
   hasHr: boolean
   hasAccess: boolean
@@ -149,10 +158,11 @@ function Steps({
   reviewDone: boolean
   signedOff: boolean
   exported: boolean
+  closed: boolean
 }) {
   const resolved = (identities?.summary.accounts ?? 0) > 0 && (identities?.summary.not_resolved ?? 0) === 0
   const ready = Boolean(identities?.summary.ready_for_analysis)
-  const steps = [
+  const steps: { label: string; done: boolean; soon?: boolean }[] = [
     { label: 'Upload HR roster', done: hasHr },
     { label: 'Upload access lists', done: hasAccess },
     { label: 'Match accounts to people', done: resolved },
@@ -160,8 +170,9 @@ function Steps({
     { label: 'Run analysis', done: analyzed },
     { label: 'Review access', done: reviewDone },
     { label: 'Sign off', done: signedOff },
+    { label: 'Remediate & verify', done: closed },
+    { label: 'Close campaign', done: closed },
     { label: 'Export evidence', done: exported },
-    { label: 'Remediate', done: false, soon: true },
   ]
   return (
     <ol className="steps">
@@ -630,6 +641,8 @@ function AnalysisSection({
   const inReview = campaign.state === 'in_review'
   const reviewed = inReview || ['remediating', 'verifying', 'closed'].includes(campaign.state)
   const [statement, setStatement] = useState('')
+  const [overrideReason, setOverrideReason] = useState('')
+  const overrideOk = overrideReason.trim().length >= 10
   const ready = Boolean(identities?.summary.ready_for_analysis)
   const canRun = ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
   const summary = analysis?.summary ?? null
@@ -643,8 +656,9 @@ function AnalysisSection({
     return all.filter((i) => i.severity === severity)
   }, [analysis, severity, mineOnly, pendingOnly])
   const bulkEligible = items.filter(
-    (i) => i.status === 'pending' && (i.severity === 'none' || i.severity === 'low') && !i.is_own_access,
+    (i) => i.status === 'pending' && (i.severity === 'none' || i.severity === 'low') && !i.is_own_access && i.can_decide,
   )
+  const bulkNeedsOverride = bulkEligible.some((i) => i.needs_override)
 
   async function call(label: string, path: string, init: RequestInit) {
     setBusy(label)
@@ -706,13 +720,14 @@ function AnalysisSection({
             <span className="hint">
               {progress.by_action.keep} kept · {progress.by_action.revoke} revoked · {progress.by_action.modify} to modify
               {progress.high_risk_pending > 0 && ` · ${progress.high_risk_pending} high-risk still open`}
+              {progress.decided_by_owner_override > 0 && ` · ${progress.decided_by_owner_override} decided by the owner instead of the reviewer`}
             </span>
           </div>
           <div className="progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total}
             aria-valuenow={progress.decided}>
             <span style={{ width: `${progress.total ? (100 * progress.decided) / progress.total : 0}%` }} />
           </div>
-          {progress.complete && inReview && (
+          {progress.complete && inReview && campaign.is_owner && (
             <form
               className="signoff"
               onSubmit={(e) => {
@@ -760,7 +775,25 @@ function AnalysisSection({
             </>
           )}
 
-          <AppOwners campaign={campaign} people={people} onChange={onChange} />
+          {campaign.is_owner && <AppOwners campaign={campaign} people={people} onChange={onChange} />}
+
+          {inReview && campaign.is_owner && (
+            <div className="override-box">
+              <label htmlFor="override-reason">
+                <strong>Deciding for reviewers?</strong> Each item should be decided by its assigned reviewer. As
+                campaign owner you can decide instead (or decide items with no reviewer), but the evidence pack records
+                that you did and why.
+              </label>
+              <textarea id="override-reason" rows={2} maxLength={2000} value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="e.g. Reviewers not yet onboarded; decisions confirmed with each manager by email" />
+              <span className="hint">
+                {overrideOk
+                  ? 'This reason is saved with every decision you make for someone else.'
+                  : 'Needed (10+ characters) before you can decide items assigned to someone else.'}
+              </span>
+            </div>
+          )}
 
           <div className="tabs" role="tablist">
             {[
@@ -786,9 +819,14 @@ function AnalysisSection({
               </label>
             )}
             {inReview && bulkEligible.length > 0 && (
-              <button type="button" className="ghost small" disabled={busy !== null}
+              <button type="button" className="ghost small" disabled={busy !== null || (bulkNeedsOverride && !overrideOk)}
+                title={bulkNeedsOverride && !overrideOk ? 'Add an override reason above first' : undefined}
                 onClick={() => call('bulk', `/campaigns/${campaign.id}/review-items/bulk-keep`, {
-                  method: 'POST', body: JSON.stringify({ item_ids: bulkEligible.map((i) => i.id) }),
+                  method: 'POST',
+                  body: JSON.stringify({
+                    item_ids: bulkEligible.map((i) => i.id),
+                    override_reason: bulkNeedsOverride ? overrideReason.trim() : null,
+                  }),
                 })}>
                 {busy === 'bulk' ? 'Keeping…' : `Keep ${bulkEligible.length} low-risk item${bulkEligible.length === 1 ? '' : 's'} shown`}
               </button>
@@ -801,7 +839,7 @@ function AnalysisSection({
             <div className="review-list">
               {items.map((item) => (
                 <ReviewItemRow key={item.id} campaignId={campaign.id} item={item} inReview={inReview}
-                  people={people} onChange={onChange} />
+                  people={people} onChange={onChange} isOwner={campaign.is_owner} overrideReason={overrideReason.trim()} />
               ))}
             </div>
           )}
@@ -873,12 +911,16 @@ function ReviewItemRow({
   inReview,
   people,
   onChange,
+  isOwner,
+  overrideReason,
 }: {
   campaignId: string
   item: ReviewItem
   inReview: boolean
   people: PersonRef[]
   onChange: () => Promise<void>
+  isOwner: boolean
+  overrideReason: string
 }) {
   const api = useApi()
   const [open, setOpen] = useState(false)
@@ -910,7 +952,13 @@ function ReviewItemRow({
     }
   }
   const decide = (action: string, justification?: string) =>
-    send(`/campaigns/${campaignId}/review-items/${item.id}/decision`, { action, justification })
+    send(`/campaigns/${campaignId}/review-items/${item.id}/decision`, {
+      action,
+      justification,
+      override_reason: item.needs_override ? overrideReason : undefined,
+    })
+  const reviewerName = item.reviewer ? item.reviewer.name ?? item.reviewer.email : null
+  const blockedByOverride = item.needs_override && overrideReason.length < 10
 
   function keep() {
     if (needsJustification) setMode('keep')
@@ -962,8 +1010,12 @@ function ReviewItemRow({
 
       {item.decision && (
         <div className={`decision decision-${item.decision.action}`}>
-          <strong>{ACTION_LABELS[item.decision.action]}</strong> by {item.decision.actor} ·{' '}
+          <strong>{ACTION_LABELS[item.decision.action]}</strong> by {item.decision.actor}
+          {item.decision.as_assigned_reviewer ? ' (assigned reviewer)' : ' (campaign owner)'} ·{' '}
           {new Date(item.decision.decided_at).toLocaleString()}
+          {item.decision.override_reason && (
+            <span className="decision-why">Override reason: “{item.decision.override_reason}”</span>
+          )}
           {item.decision.justification && <span className="decision-why">“{item.decision.justification}”</span>}
         </div>
       )}
@@ -972,6 +1024,15 @@ function ReviewItemRow({
         <div className="decision-actions">
           {item.is_own_access ? (
             <span className="hint">This is your own access, so someone else has to review it.</span>
+          ) : !item.can_decide ? (
+            <span className="hint">
+              Assigned to {reviewerName ?? 'nobody yet'}. Only they or the campaign owner can decide this item.
+            </span>
+          ) : blockedByOverride ? (
+            <span className="hint">
+              {reviewerName ? `Assigned to ${reviewerName}. ` : 'No reviewer assigned. '}
+              To decide it yourself, add an override reason in the box above.
+            </span>
           ) : (
             <>
               <button type="button" className="act keep" disabled={busy || item.status === 'keep'} onClick={keep}>Keep</button>
@@ -979,9 +1040,11 @@ function ReviewItemRow({
               <button type="button" className="act modify" disabled={busy} onClick={() => setMode(mode === 'modify' ? null : 'modify')}>Modify…</button>
             </>
           )}
-          <button type="button" className="ghost small" disabled={busy} onClick={() => setMode(mode === 'reassign' ? null : 'reassign')}>
-            Reassign…
-          </button>
+          {isOwner && (
+            <button type="button" className="ghost small" disabled={busy} onClick={() => setMode(mode === 'reassign' ? null : 'reassign')}>
+              Reassign…
+            </button>
+          )}
         </div>
       )}
 
@@ -1025,6 +1088,231 @@ function ReviewItemRow({
 }
 
 // ---------------------------------------------------------------------------
+
+const REM_LABELS: Record<string, string> = {
+  open: 'To do',
+  done: 'Done, not verified',
+  verified: 'Verified',
+  accepted: 'Accepted',
+}
+
+function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChange: () => Promise<void> }) {
+  const api = useApi()
+  const download = useDownload()
+  const [data, setData] = useState<RemediationList | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [verifyApp, setVerifyApp] = useState('')
+  const [verifyFile, setVerifyFile] = useState<File | null>(null)
+  const [verifyKey, setVerifyKey] = useState(0)
+  const [verifyResult, setVerifyResult] = useState<VerifyResult['result'] | null>(null)
+  const owner = campaign.is_owner
+  const editable = owner && campaign.state === 'remediating'
+
+  const load = useCallback(async () => {
+    try {
+      setData(await api<RemediationList>(`/campaigns/${campaign.id}/remediations`))
+    } catch (err) {
+      setError(errorText(err))
+    }
+  }, [api, campaign.id])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve().then(() => {
+      if (!cancelled) void load()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [load, campaign.state])
+
+  async function run(label: string, fn: () => Promise<unknown>) {
+    setBusy(label)
+    setError(null)
+    try {
+      await fn()
+      await load()
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const apps = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of data?.items ?? []) {
+      if (r.application_id && r.application && (r.status === 'open' || r.status === 'done')) m.set(r.application_id, r.application)
+    }
+    return [...m.entries()]
+  }, [data])
+
+  async function verify() {
+    if (!verifyFile || !verifyApp) return
+    const form = new FormData()
+    form.append('application_id', verifyApp)
+    form.append('file', verifyFile)
+    await run('verify', async () => {
+      const r = await api<VerifyResult>(`/campaigns/${campaign.id}/remediations/verify`, { method: 'POST', body: form })
+      setVerifyResult(r.result)
+      setVerifyFile(null)
+      setVerifyKey((k) => k + 1)
+    })
+  }
+
+  const s = data?.summary
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Remediation</h2>
+        {s && <span className="badge">{s.verified + s.accepted} of {s.total} confirmed</span>}
+      </div>
+      <p className="panel-text">
+        Every revoke or modify decision is an access change someone has to make. Record the ticket and when it's
+        done, then upload a fresh access list for that application: the change counts as <strong>verified</strong>{' '}
+        only when the new list no longer shows the access. If a system has no export, accept it with a written reason.
+      </p>
+      {error && <div className="error">{error}</div>}
+      {s && s.total === 0 && <div className="notice">No access changes were needed.</div>}
+
+      {s && s.total > 0 && (
+        <>
+          <div className="actions">
+            <button type="button" className="ghost small" disabled={busy !== null}
+              onClick={() => run('tickets', () => download(`/campaigns/${campaign.id}/remediations/tickets.csv`,
+                'remediation-tickets.csv', 'GET'))}>
+              Download tickets (CSV for Jira import)
+            </button>
+          </div>
+
+          <div className="rem-list">
+            {data!.items.map((r) => (
+              <RemediationRow key={r.id} campaignId={campaign.id} rem={r} editable={editable}
+                busy={busy !== null} run={run} />
+            ))}
+          </div>
+
+          {editable && apps.length > 0 && (
+            <div className="verify-box">
+              <h3>Verify with a fresh access list</h3>
+              <p className="hint">Export the application's current users and roles after IT has made the changes.</p>
+              <div className="verify-row">
+                <select value={verifyApp} onChange={(e) => setVerifyApp(e.target.value)} aria-label="Application to verify">
+                  <option value="">Application…</option>
+                  {apps.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+                <input key={verifyKey} type="file" accept=".csv,.xlsx,.xls" aria-label="Fresh access list"
+                  onChange={(e) => setVerifyFile(e.target.files?.[0] ?? null)} />
+                <button type="button" className="primary small" disabled={!verifyApp || !verifyFile || busy !== null}
+                  onClick={verify}>
+                  {busy === 'verify' ? 'Checking…' : 'Check changes'}
+                </button>
+              </div>
+              {verifyResult && (
+                <div className={verifyResult.verified === verifyResult.checked ? 'notice' : 'attention-row'}>
+                  {verifyResult.application}: {verifyResult.verified} of {verifyResult.checked} change(s) confirmed.
+                  {verifyResult.results.filter((x) => !x.verified).map((x) => (
+                    <div key={x.remediation_id}>Still there: {x.account} · {x.entitlement} ({x.detail})</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {campaign.state === 'remediating' && owner && (
+            <div className="actions">
+              <button type="button" className="primary" disabled={!s.ready_to_close || busy !== null}
+                onClick={() => run('close', () => api(`/campaigns/${campaign.id}/close`, { method: 'POST' }))}>
+                {busy === 'close' ? 'Closing…' : 'Close campaign'}
+              </button>
+              {!s.ready_to_close && (
+                <span className="hint">{s.open + s.done} change(s) still need verifying or accepting.</span>
+              )}
+            </div>
+          )}
+          {campaign.state === 'closed' && <div className="notice">Campaign closed. Every access change is confirmed.</div>}
+        </>
+      )}
+    </section>
+  )
+}
+
+function RemediationRow({
+  campaignId,
+  rem: r,
+  editable,
+  busy,
+  run,
+}: {
+  campaignId: string
+  rem: Remediation
+  editable: boolean
+  busy: boolean
+  run: (label: string, fn: () => Promise<unknown>) => Promise<void>
+}) {
+  const api = useApi()
+  const [ticket, setTicket] = useState(r.ticket_ref ?? '')
+  const [mode, setMode] = useState<null | 'accept'>(null)
+  const [reason, setReason] = useState('')
+  const openish = r.status === 'open' || r.status === 'done'
+  const post = (path: string, body: object) => api(path, { method: 'POST', body: JSON.stringify(body) })
+
+  return (
+    <div className={`rem rem-${r.status}`}>
+      <div className="rem-main">
+        <span className={`status-pill rem-pill-${r.status}`}>{REM_LABELS[r.status]}</span>
+        <div className="review-what">
+          <strong>{r.action === 'revoke' ? 'Remove' : 'Change'} {r.entitlement}</strong>
+          <span className="identity-sub">{r.application} · {r.account}{r.person ? ` · ${r.person}` : ''}</span>
+          {r.action === 'modify' && r.change && <span className="identity-sub">Requested: {r.change}</span>}
+        </div>
+        <div className="review-who">
+          {r.ticket_ref && <span className="identity-sub">Ticket {r.ticket_ref}</span>}
+          {r.verification_method === 'reupload' && r.verified_at && (
+            <span className="identity-sub">Confirmed by upload, {new Date(r.verified_at).toLocaleDateString()}</span>
+          )}
+          {r.status === 'accepted' && r.note && <span className="identity-sub">Accepted: “{r.note}”</span>}
+          {r.status === 'done' && <span className="identity-sub">Marked done by {r.resolved_by}</span>}
+        </div>
+      </div>
+      {editable && openish && (
+        <div className="decision-actions">
+          <input className="text-input small-input" placeholder="Ticket no., e.g. IT-101" value={ticket} maxLength={255}
+            onChange={(e) => setTicket(e.target.value)} aria-label="Ticket number" />
+          <button type="button" className="ghost small" disabled={busy || ticket.trim() === (r.ticket_ref ?? '')}
+            onClick={() => run('ticket', () => post(`/campaigns/${campaignId}/remediations/${r.id}`, { ticket_ref: ticket }))}>
+            Save ticket
+          </button>
+          {r.status === 'open' && (
+            <button type="button" className="act keep" disabled={busy}
+              onClick={() => run('done', () => post(`/campaigns/${campaignId}/remediations/${r.id}`, { status: 'done' }))}>
+              Mark done
+            </button>
+          )}
+          <button type="button" className="ghost small" disabled={busy} onClick={() => setMode(mode ? null : 'accept')}>
+            Accept without upload…
+          </button>
+        </div>
+      )}
+      {mode === 'accept' && openish && editable && (
+        <form className="justify" onSubmit={(e) => {
+          e.preventDefault()
+          void run('accept', () => post(`/campaigns/${campaignId}/remediations/${r.id}/accept`, { reason }))
+        }}>
+          <label htmlFor={`acc-${r.id}`}>Why can't this be confirmed with an upload? (required)</label>
+          <textarea id={`acc-${r.id}`} rows={2} maxLength={2000} value={reason} onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. Vendor portal has no user export; removal confirmed by vendor email, ticket IT-102" />
+          <div className="justify-actions">
+            <button type="submit" className="primary small" disabled={busy || reason.trim().length < 10}>Accept</button>
+            <button type="button" className="ghost small" onClick={() => setMode(null)}>Cancel</button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
 
 const EXPORTABLE = new Set(['analyzing', 'in_review', 'remediating', 'verifying', 'closed'])
 

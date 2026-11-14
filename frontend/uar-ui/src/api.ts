@@ -70,10 +70,10 @@ export function useDownload() {
   const getToken = useToken()
 
   return useCallback(
-    async (path: string, fallbackName: string): Promise<string> => {
+    async (path: string, fallbackName: string, method: 'GET' | 'POST' = 'POST'): Promise<string> => {
       const headers = new Headers()
       if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
-      const res = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', headers })
+      const res = await fetch(`${API_BASE_URL}${path}`, { method, headers })
       if (!res.ok) throw new ApiError(res.status, await readError(res))
       const match = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')
       const name = match?.[1] ?? fallbackName
@@ -127,6 +127,7 @@ export type Campaign = {
   rule_set_version: string | null
   created_by: string | null
   created_at: string | null
+  is_owner: boolean
   signed_off_by: string | null
   signed_off_at: string | null
   snapshots: Snapshot[]
@@ -221,6 +222,8 @@ export type ReviewItem = {
   decision: Decision | null
   is_mine: boolean
   is_own_access: boolean
+  needs_override: boolean
+  can_decide: boolean
 }
 
 export type Decision = {
@@ -230,6 +233,8 @@ export type Decision = {
   actor: string
   decided_at: string
   channel: string
+  as_assigned_reviewer: boolean
+  override_reason: string | null
 }
 
 export type ReviewProgress = {
@@ -239,6 +244,7 @@ export type ReviewProgress = {
   high_risk_pending: number
   by_action: Record<string, number>
   unassigned: number
+  decided_by_owner_override: number
   complete: boolean
 }
 
@@ -259,4 +265,39 @@ export type Analysis = {
   } | null
   progress: ReviewProgress | null
   items: ReviewItem[]
+}
+
+export type Remediation = {
+  id: string
+  status: 'open' | 'done' | 'verified' | 'accepted'
+  action: 'revoke' | 'modify' | null
+  severity: string | null
+  application: string | null
+  application_id: string | null
+  account: string | null
+  entitlement: string | null
+  person: string | null
+  change: string | null
+  decided_by: string | null
+  ticket_ref: string | null
+  note: string | null
+  resolved_by: string | null
+  resolved_at: string | null
+  verified_at: string | null
+  verification_method: string | null
+}
+
+export type RemediationList = {
+  summary: { total: number; open: number; done: number; verified: number; accepted: number; ready_to_close: boolean }
+  items: Remediation[]
+}
+
+export type VerifyResult = {
+  result: {
+    application: string
+    checked: number
+    verified: number
+    results: { remediation_id: string; account: string; entitlement: string; verified: boolean; detail: string }[]
+  }
+  remediations: RemediationList
 }

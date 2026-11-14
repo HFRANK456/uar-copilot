@@ -48,6 +48,7 @@ from backend.db.models import (
 )
 from backend.domain.evidence import record_event, verify_chain
 from backend.domain.identity import campaign_accounts
+from backend.domain import remediation as remediation_service
 from backend.domain.review import review_progress
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
@@ -157,6 +158,8 @@ def _collect(session: Session, campaign: Campaign) -> Dict[str, Any]:
             "finding_ids": ";".join(i.finding_ids or []),
             "decision": d.action.value if d else "pending", "justification": d.justification if d else None,
             "decided_by": d.actor_id if d else None, "decided_at": _iso(d.decided_at) if d else None,
+            "decided_by_assigned_reviewer": d.as_assigned_reviewer if d else None,
+            "override_reason": d.override_reason if d else None,
         }
         item_rows.append(row)
         item_lookup[i.id] = row
@@ -171,6 +174,8 @@ def _collect(session: Session, campaign: Campaign) -> Dict[str, Any]:
             "application": r.get("application"), "account": r.get("account"), "entitlement": r.get("entitlement"),
             "action": d.action.value, "justification": d.justification, "actor": d.actor_id,
             "decided_at": _iso(d.decided_at), "channel": d.channel, "superseded": superseded,
+            "assigned_reviewer": who(d.assigned_reviewer_id), "assigned_reviewer_email": email(d.assigned_reviewer_id),
+            "decided_by_assigned_reviewer": d.as_assigned_reviewer, "override_reason": d.override_reason,
         })
 
     mapping_rows = []
@@ -180,7 +185,13 @@ def _collect(session: Session, campaign: Campaign) -> Dict[str, Any]:
                                  "application": apps[s.application_id].name if s.application_id in apps else None,
                                  **m, "confirmed_by": s.mapping_confirmed_by})
 
+    remediation_rows = [{**r, "id": str(r["id"]), "resolved_at": _iso(r["resolved_at"]),
+                         "verified_at": _iso(r["verified_at"]),
+                         "verified_snapshot_id": str(r["verified_snapshot_id"]) if r["verified_snapshot_id"] else None}
+                        for r in remediation_service.rows(session, campaign)]
+
     return {
+        "remediation_rows": remediation_rows,
         "apps": apps, "snapshots": snapshots, "events": events, "identity_rows": identity_rows,
         "finding_rows": finding_rows, "item_rows": item_rows, "decision_rows": decision_rows,
         "mapping_rows": mapping_rows,
@@ -303,6 +314,8 @@ def _pdf(campaign: Campaign, data: Dict[str, Any], chain: Dict[str, Any], progre
              "confirm it is the file that was reviewed.")
     with pdf.table_ctx(["File", "Kind / application", "Rows", "SHA-256"],
                        [[s.filename, "HR roster" if s.kind.value == "hr_roster" else
+                         ("Verification: " + (data["apps"][s.application_id].name if s.application_id in data["apps"]
+                                              else "")) if s.kind.value == "verification" else
                          (data["apps"][s.application_id].name if s.application_id in data["apps"] else "access list"),
                          s.row_count, s.sha256] for s in data["snapshots"]], (45, 35, 12, 86)):
         pass
@@ -333,20 +346,44 @@ def _pdf(campaign: Campaign, data: Dict[str, Any], chain: Dict[str, Any], progre
             pass
 
     pdf.h2("4. Review decisions")
+    overrides = sum(1 for r in data["item_rows"] if r["decided_by_assigned_reviewer"] is False)
     pdf.para(f"{progress['decided']} of {progress['total']} items decided: {progress['by_action']['keep']} kept, "
              f"{progress['by_action']['revoke']} revoked, {progress['by_action']['modify']} to modify. "
-             "Every decision, including changed ones, is in decisions.csv.")
+             f"{progress['decided'] - overrides} decided by the assigned reviewer; {overrides} decided by the campaign "
+             "owner instead, each with a recorded override reason. Every decision, including changed ones, is in "
+             "decisions.csv.")
     risky = [r for r in data["item_rows"] if r["severity"] in ("critical", "high", "medium")]
     if risky:
         with pdf.table_ctx(["Sev.", "Access", "Person", "Decision", "By / justification"],
                            [[r["severity"], f"{r['application']} {r['entitlement']} ({r['account']})",
                              r["person"] or r["account_type"].replace("_", " ").replace("non human", "service/shared"),
                              r["decision"],
-                             f"{r['decided_by'] or '-'}" + (f": {r['justification']}" if r["justification"] else "")]
+                             f"{r['decided_by'] or '-'}"
+                             + (" (assigned reviewer)" if r["decided_by_assigned_reviewer"] else
+                                f" (owner override: {r['override_reason']})" if r["override_reason"] else "")
+                             + (f". Reason: {r['justification']}" if r["justification"] else "")]
                             for r in risky], (15, 52, 30, 20, 61)):
             pass
 
-    pdf.h2("5. How to verify this pack")
+    rem = data["remediation_rows"]
+    pdf.h2("5. Remediation")
+    if not rem:
+        pdf.para("No access changes were required." if campaign.signed_off_at else
+                 "Remediation starts when the campaign is signed off.")
+    else:
+        done = sum(1 for r in rem if r["status"] in ("verified", "accepted"))
+        pdf.para(f"{len(rem)} access change(s) from revoke/modify decisions; {done} confirmed. 'verified' means a later "
+                 "upload of that application's access list no longer shows the access (the upload is in population/); "
+                 "'accepted' means it was closed with a written reason instead. Details in remediations.csv.")
+        with pdf.table_ctx(["Change", "Access", "Status", "Ticket / evidence"],
+                           [[r["action"], f"{r['application']} {r['entitlement']} ({r['account']})", r["status"],
+                             " ".join(x for x in [r["ticket_ref"] or "",
+                                                  f"verified {r['verified_at'][:10]}" if r["verification_method"] == "reupload" and r["verified_at"] else "",
+                                                  f"reason: {r['note']}" if r["status"] == "accepted" and r["note"] else ""] if x) or "-"]
+                            for r in rem], (18, 70, 22, 68)):
+            pass
+
+    pdf.h2("6. How to verify this pack")
     pdf.para("1. manifest.json lists the SHA-256 of every other file in this pack; recompute and compare. "
              "2. evidence_events.jsonl is a hash chain: each event's hash is SHA-256 of the previous hash followed "
              "by the event's canonical JSON (keys sorted, no spaces; fields campaign_id, seq, type, payload, actor, "
@@ -376,7 +413,9 @@ column_mappings.csv     How each file's columns were interpreted, with confidenc
 identities.csv          Which person each account belongs to, how that was decided and by whom.
 findings.csv            Every finding: rule ID and version, severity, the exact inputs, and why it fired.
 review_items.csv        Every reviewed entitlement with its reviewer and final decision.
-decisions.csv           Full decision history, including decisions that were later changed (superseded=True).
+decisions.csv           Full decision history, including decisions that were later changed (superseded=True),
+                        who the item was assigned to, and the override reason when someone else decided.
+remediations.csv        Each access change from a revoke/modify decision and how it was confirmed.
 evidence_events.jsonl   The append-only, hash-chained event ledger for the campaign.
 
 Verifying
@@ -414,10 +453,16 @@ def build_evidence_pack(session: Session, campaign: Campaign, actor: str) -> Evi
     files["review_items.csv"] = _csv(data["item_rows"], [
         "review_item_id", "severity", "application", "account", "entitlement", "account_type", "person",
         "employment_status",
-        "reviewer", "reviewer_email", "decision", "justification", "decided_by", "decided_at", "finding_ids"])
+        "reviewer", "reviewer_email", "decision", "justification", "decided_by", "decided_at",
+        "decided_by_assigned_reviewer", "override_reason", "finding_ids"])
     files["decisions.csv"] = _csv(data["decision_rows"], [
         "decision_id", "review_item_id", "application", "account", "entitlement", "action", "justification",
-        "actor", "decided_at", "channel", "superseded"])
+        "actor", "decided_at", "channel", "superseded", "assigned_reviewer", "assigned_reviewer_email",
+        "decided_by_assigned_reviewer", "override_reason"])
+    files["remediations.csv"] = _csv(data["remediation_rows"], [
+        "id", "status", "action", "severity", "application", "account", "entitlement", "person", "change",
+        "decided_by", "ticket_ref", "note", "resolved_by", "resolved_at", "verification_method", "verified_at",
+        "verified_snapshot_id"])
     files["evidence_events.jsonl"] = "".join(
         json.dumps({"seq": e.seq, "type": e.type, "actor": e.actor, "actor_kind": e.actor_kind,
                     "occurred_at": _iso(e.occurred_at), "campaign_id": str(e.campaign_id), "payload": e.payload,
