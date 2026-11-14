@@ -49,3 +49,8 @@ Identity matching links accounts to HR people by employee ID (1.00), email (0.99
 local part (0.92), display name (0.80) or username pattern such as `pshah` (0.75). Links at 0.90 or above
 are automatic; weaker or tied matches queue for a person, service/shared accounts are set aside, and
 accounts on an unknown email domain are marked external. Re-running never overwrites a manual decision.
+
+The evidence pack contains `report.pdf`, `manifest.json` (SHA-256 of every file plus chain verification),
+the uploaded files byte-for-byte under `population/`, CSVs for column mappings, identities, findings,
+review items and full decision history, `evidence_events.jsonl` (the hash chain) and a `README.txt`
+explaining how to verify it independently.

@@ -52,6 +52,7 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_credentials=False,  # bearer tokens, not cookies
     allow_methods=["GET", "POST", "PUT"],
+    expose_headers=["Content-Disposition", "X-Manifest-SHA256"],
     allow_headers=["Authorization", "Content-Type"],
 )
 

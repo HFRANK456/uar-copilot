@@ -630,3 +630,143 @@ def test_reassign_and_app_owner(api):
     assert api.post(url, json={"person_id": people["Jordan Kim"]}).status_code == 403
     types = [e["type"] for e in api.get(f"/campaigns/{cid}/evidence").json()["events"]]
     assert "application.owner_set" in types and "review.reassigned" in types
+
+
+# ---------------------------------------------------------------------------
+# Sign-off and evidence pack
+# ---------------------------------------------------------------------------
+
+
+def _decide_all(api, cid):
+    for key, item in _items(api, cid).items():
+        if item["severity"] == "critical":
+            body = {"action": "revoke"}
+        elif item["severity"] in ("high",):
+            body = {"action": "keep", "justification": "On-call admin approved by CISO, SEC-12"}
+        else:
+            body = {"action": "keep"}
+        r = api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json=body)
+        assert r.status_code == 200, r.text
+
+
+def test_sign_off_requires_every_decision(api):
+    cid = _review_campaign(api)
+    assert api.post(f"/campaigns/{cid}/sign-off", json={}).status_code == 409  # not in review yet
+    api.post(f"/campaigns/{cid}/review/start")
+    r = api.post(f"/campaigns/{cid}/sign-off", json={})
+    assert r.status_code == 422 and "still need a decision" in r.json()["detail"]
+
+    _decide_all(api, cid)
+    r = api.post(f"/campaigns/{cid}/sign-off", json={"statement": "Reviewed with IT, all decisions final."})
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "remediating"  # Jordan's access was revoked, so changes are pending
+    ev = api.get(f"/campaigns/{cid}/evidence").json()["events"]
+    signed = next(e for e in ev if e["type"] == "campaign.signed_off")
+    assert signed["payload"]["changes_to_remediate"] == 1
+    assert api.post(f"/campaigns/{cid}/review-items/{_items(api, cid)[('AWS', 'jordan.kim', 'AdministratorAccess')]['id']}/decision",
+                    json={"action": "keep", "justification": "changed my mind after sign-off"}).status_code == 409
+
+
+def test_sign_off_with_everything_kept_closes(api):
+    cid = _review_campaign(api)
+    api.post(f"/campaigns/{cid}/review/start")
+    for item in _items(api, cid).values():
+        body = {"action": "keep", "justification": "Business need confirmed with the manager"}
+        assert api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json=body).status_code == 200
+    assert api.post(f"/campaigns/{cid}/sign-off", json={}).json()["state"] == "closed"
+
+
+def _unzip(content):
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        return {n: zf.read(n) for n in zf.namelist()}
+
+
+def test_evidence_pack_contents_and_verification(api):
+    import csv
+    import hashlib
+    import io
+    import json
+
+    cid = _review_campaign(api)
+    assert api.post(f"/campaigns/{cid}/review/start").status_code == 200
+    _decide_all(api, cid)
+    # Change one decision so the history shows a superseded row.
+    pshah = _items(api, cid)[("GitHub", "pshah", "admin")]
+    api.post(f"/campaigns/{cid}/review-items/{pshah['id']}/decision", json={"action": "revoke"})
+    api.post(f"/campaigns/{cid}/sign-off", json={})
+
+    r = api.post(f"/campaigns/{cid}/evidence-pack")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/zip"
+    assert "attachment" in r.headers["content-disposition"]
+    files = _unzip(r.content)
+    manifest = json.loads(files["manifest.json"])
+    assert hashlib.sha256(files["manifest.json"]).hexdigest() == r.headers["x-manifest-sha256"]
+
+    # 1. Every file matches the manifest.
+    assert set(manifest["files"]) == set(files) - {"manifest.json"}
+    for name, meta in manifest["files"].items():
+        assert hashlib.sha256(files[name]).hexdigest() == meta["sha256"], name
+
+    # Population files are the uploads, byte for byte.
+    pop = {n: b for n, b in files.items() if n.startswith("population/")}
+    assert len(pop) == 3
+    assert (DATA / "sample_hr_roster.csv").read_bytes() in pop.values()
+
+    # 2. Recompute the hash chain exactly as README.txt describes.
+    prev = "0" * 64
+    events = [json.loads(line) for line in files["evidence_events.jsonl"].decode().splitlines()]
+    for e in events:
+        body = {k: e[k] for k in ("campaign_id", "seq", "type", "payload", "actor", "actor_kind", "occurred_at")}
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+        assert e["prev_hash"] == prev
+        prev = hashlib.sha256(prev.encode() + canonical).hexdigest()
+        assert e["hash"] == prev, e["seq"]
+    assert prev == manifest["evidence_chain"]["head_hash"] and manifest["evidence_chain"]["valid"]
+
+    # 3. CSV content.
+    def rows(name):
+        return list(csv.DictReader(io.StringIO(files[name].decode())))
+
+    items = rows("review_items.csv")
+    assert len(items) == 12 and all(i["decision"] != "pending" for i in items)
+    jordan = next(i for i in items if i["account"] == "jordan.kim")
+    assert jordan["severity"] == "critical" and jordan["decision"] == "revoke" and jordan["reviewer"] == "Priya Shah"
+    decisions = rows("decisions.csv")
+    assert [d["superseded"] for d in decisions if d["account"] == "pshah"] == ["True", "False"]
+    findings = rows("findings.csv")
+    assert any(f["rule_id"] == "terminated_privileged_active" and json.loads(f["inputs"])["termination_date"] == "2026-10-03"
+               for f in findings)
+    assert len(rows("identities.csv")) == 11
+    assert rows("column_mappings.csv")
+    assert files["report.pdf"].startswith(b"%PDF")
+    assert b"Signed off by" in files["README.txt"] and manifest["draft"] is False
+
+    # The export itself is in the ledger, carrying the manifest hash.
+    ev = api.get(f"/campaigns/{cid}/evidence").json()
+    assert ev["events"][-1]["type"] == "evidence.exported"
+    assert ev["events"][-1]["payload"]["manifest_sha256"] == r.headers["x-manifest-sha256"]
+    assert ev["verification"]["valid"]
+
+
+def test_evidence_pack_draft_and_gating(api):
+    import json
+
+    cid = _ingested_campaign(api)
+    assert api.post(f"/campaigns/{cid}/evidence-pack").status_code == 409  # nothing analyzed yet
+    cid = _review_campaign(api)
+    r = api.post(f"/campaigns/{cid}/evidence-pack")
+    assert r.status_code == 200
+    files = _unzip(r.content)
+    assert json.loads(files["manifest.json"])["draft"] is True
+    assert b"DRAFT" in files["README.txt"]
+
+
+def test_pdf_handles_non_latin_names():
+    from backend.domain.export import _latin1
+
+    assert _latin1("Zoë Ångström → done") == "Zoë Ångström -> done"
+    assert _latin1("名前") == "??"

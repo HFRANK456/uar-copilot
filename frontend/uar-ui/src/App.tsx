@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
 import { useAuth0 } from '@auth0/auth0-react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import CampaignsPage from './pages/Campaigns'
 import CampaignDetailPage from './pages/CampaignDetail'
 import './App.css'
@@ -218,11 +218,13 @@ function AppMain() {
     <div className="page">
       <header className="hero">
         <div>
-          <p className="eyebrow">Quick scan</p>
+          <p className="eyebrow">Quick scan · one-off check</p>
           <h1>Automated Access Risk Detection</h1>
           <p className="subhead">
-            Upload access and termination files to generate an audit-grade risk
-            summary with prioritized findings.
+            Check one access list against one termination list for a quick risk
+            summary. Nothing is saved. For a full access review with an HR roster,
+            several applications, reviewers and an evidence pack, use{' '}
+            <Link to="/campaigns">Campaigns</Link>.
           </p>
         </div>
         <div className="hero-card">
@@ -430,6 +432,43 @@ function AuthBar() {
   )
 }
 
+/**
+ * Auth0 sends failed sign-ins back as ?error=...&error_description=...
+ * Show that message instead of dropping it, and let the user retry.
+ */
+function AuthErrorBanner() {
+  const { error, loginWithRedirect } = useAuth0()
+  const [fromUrl] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('error')
+    return code ? params.get('error_description') || code : null
+  })
+  const [dismissed, setDismissed] = useState(false)
+  const message = fromUrl ?? error?.message ?? null
+  if (!authEnabled || !message || dismissed) return null
+
+  function clear() {
+    const url = new URL(window.location.href)
+    for (const key of ['error', 'error_description', 'state']) url.searchParams.delete(key)
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+    setDismissed(true)
+  }
+
+  return (
+    <div className="auth-error" role="alert">
+      <div>
+        <strong>Sign-in failed.</strong> Auth0 said: “{message}”
+      </div>
+      <div className="auth-error-actions">
+        <button type="button" className="primary small" onClick={() => { clear(); void loginWithRedirect() }}>
+          Try again
+        </button>
+        <button type="button" className="ghost small" onClick={clear}>Dismiss</button>
+      </div>
+    </div>
+  )
+}
+
 /** Campaign pages hold customer data, so they need a signed-in user. */
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0()
@@ -454,18 +493,20 @@ export default function App() {
   return (
     <>
       <nav className="topnav">
-        <NavLink to="/" end className="brand">UAR Copilot</NavLink>
+        <Link to="/campaigns" className="brand">UAR Copilot</Link>
         <div className="nav-links">
-          <NavLink to="/" end>Quick scan</NavLink>
           <NavLink to="/campaigns">Campaigns</NavLink>
+          <NavLink to="/scan">Quick scan</NavLink>
         </div>
         <div className="nav-auth">
           <AuthBar />
         </div>
       </nav>
+      <AuthErrorBanner />
       <main>
         <Routes>
-          <Route path="/" element={<AppMain />} />
+          <Route path="/" element={<Navigate to={`/campaigns${window.location.search}`} replace />} />
+          <Route path="/scan" element={<AppMain />} />
           <Route path="/campaigns" element={<RequireAuth><CampaignsPage /></RequireAuth>} />
           <Route path="/campaigns/:id" element={<RequireAuth><CampaignDetailPage /></RequireAuth>} />
           <Route path="*" element={<div className="empty"><p>Page not found.</p></div>} />

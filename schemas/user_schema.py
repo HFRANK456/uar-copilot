@@ -95,6 +95,8 @@ class CampaignOut(BaseModel):
     rule_set_version: Optional[str]
     created_by: Optional[str]
     created_at: Optional[_datetime]
+    signed_off_by: Optional[str] = None
+    signed_off_at: Optional[_datetime] = None
     snapshots: List[SnapshotOut] = Field(default_factory=list)
 
 
@@ -230,6 +232,11 @@ class ApplicationOut(BaseModel):
     id: _UUID
     name: str
     owner: Optional[PersonRef]
+
+
+
+class SignOffIn(BaseModel):
+    statement: Optional[str] = Field(default=None, max_length=2000)
 
 
 ReviewItemOut.model_rebuild()
