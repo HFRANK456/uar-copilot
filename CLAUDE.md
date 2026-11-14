@@ -102,5 +102,11 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 - Sample data for a full campaign: `data/sample_hr_roster.csv`, `data/sample_app_access_aws.csv`,
   `data/sample_app_access_github.csv`. With all three: 11 accounts, 4 queued identities, 12 review
   items (1 critical: terminated Jordan Kim with AWS admin).
+- **Live checks**: cloud sessions can't reach the live backend (sandbox blocks `onrender.com`) or the
+  user's browser. After each merge that changes something user-visible, check the Render deploy
+  logs, then tell the user the exact command to run in a **Claude desktop app session with Claude in
+  Chrome**: `/live-check` for the full end-to-end check, or `/live-check <specific action>` for one
+  change (skill in `.claude/skills/live-check/SKILL.md`; keep its expected results in sync when
+  behaviour changes). The user signs in to Auth0 themselves; Claude never handles their password.
 - Keep user-facing explanations plain; the user is non-technical about infra and prefers exact
   click-by-click steps for dashboards (Auth0, Render, Vercel, GitHub).
