@@ -6,6 +6,7 @@ import CampaignsPage from './pages/Campaigns'
 import CampaignDetailPage from './pages/CampaignDetail'
 import './App.css'
 import { API_BASE_URL, authEnabled } from './config'
+import { useToken } from './api'
 
 const API_URL = `${API_BASE_URL}/upload`
 
@@ -122,7 +123,8 @@ function prettifyIssue(issueType: string, explanation: string) {
 }
 
 function AppMain() {
-  const { isAuthenticated, getAccessTokenSilently } = useAuth0()
+  const { isAuthenticated } = useAuth0()
+  const getToken = useToken()
   const [userFile, setUserFile] = useState<File | null>(null)
   const [terminationFile, setTerminationFile] = useState<File | null>(null)
   const [results, setResults] = useState<Finding[]>([])
@@ -164,7 +166,7 @@ function AppMain() {
       setLoading(true)
       const headers: Record<string, string> = {}
       if (authEnabled) {
-        headers.Authorization = `Bearer ${await getAccessTokenSilently()}`
+        headers.Authorization = `Bearer ${await getToken()}`
       }
       const res = await fetch(API_URL, {
         method: 'POST',
