@@ -26,14 +26,34 @@ async function readError(res: Response): Promise<string> {
   return text || `Request failed (${res.status})`
 }
 
+// Auth0 errors that mean "this session can't be renewed in the background; sign in again".
+const SIGN_IN_AGAIN = new Set(['login_required', 'consent_required', 'interaction_required', 'missing_refresh_token', 'invalid_grant'])
+
+/** The signed-in user's access token, sending them to sign in again if it can't be renewed. */
+export function useToken() {
+  const { getAccessTokenSilently, loginWithRedirect } = useAuth0()
+  return useCallback(async (): Promise<string> => {
+    try {
+      return await getAccessTokenSilently()
+    } catch (err) {
+      const code = (err as { error?: string }).error
+      if (code && SIGN_IN_AGAIN.has(code)) {
+        void loginWithRedirect({ appState: { returnTo: window.location.pathname } })
+        throw new ApiError(401, 'Your session has expired. Taking you to sign in again…')
+      }
+      throw err
+    }
+  }, [getAccessTokenSilently, loginWithRedirect])
+}
+
 /** Fetch against the API with the signed-in user's token. */
 export function useApi() {
-  const { getAccessTokenSilently } = useAuth0()
+  const getToken = useToken()
 
   return useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       const headers = new Headers(init.headers)
-      if (authEnabled) headers.set('Authorization', `Bearer ${await getAccessTokenSilently()}`)
+      if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
       if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
         headers.set('Content-Type', 'application/json')
       }
@@ -41,18 +61,18 @@ export function useApi() {
       if (!res.ok) throw new ApiError(res.status, await readError(res))
       return (await res.json()) as T
     },
-    [getAccessTokenSilently],
+    [getToken],
   )
 }
 
 /** POST that returns a file; saves it in the browser under the server's filename. */
 export function useDownload() {
-  const { getAccessTokenSilently } = useAuth0()
+  const getToken = useToken()
 
   return useCallback(
     async (path: string, fallbackName: string): Promise<string> => {
       const headers = new Headers()
-      if (authEnabled) headers.set('Authorization', `Bearer ${await getAccessTokenSilently()}`)
+      if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
       const res = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', headers })
       if (!res.ok) throw new ApiError(res.status, await readError(res))
       const match = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')
@@ -67,7 +87,7 @@ export function useDownload() {
       URL.revokeObjectURL(url)
       return name
     },
-    [getAccessTokenSilently],
+    [getToken],
   )
 }
 

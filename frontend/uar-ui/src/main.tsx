@@ -18,6 +18,9 @@ createRoot(document.getElementById('root')!).render(
         }}
         cacheLocation="localstorage"
         useRefreshTokens
+        // If no refresh token is stored (e.g. offline access was off when the user signed in),
+        // fall back to Auth0's silent iframe renewal instead of failing every API call.
+        useRefreshTokensFallback
         onRedirectCallback={(appState?: AppState) => {
           // Return to the page the user signed in from.
           window.history.replaceState({}, '', appState?.returnTo ?? window.location.pathname)
