@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Iterator, List
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,7 @@ from backend.db.models import (
 from backend.db.session import get_engine, tenant_session
 from backend.domain import analysis as analysis_service
 from backend.domain import campaigns as campaign_service
+from backend.domain import export as export_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
 from backend.domain import review as review_service
@@ -39,6 +40,7 @@ from schemas.user_schema import (
     DecisionOut,
     OwnerIn,
     ReassignIn,
+    SignOffIn,
     AnalysisOut,
     FindingOut,
     ReviewItemOut,
@@ -117,6 +119,8 @@ def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False) -
         rule_set_version=c.rule_set_version,
         created_by=c.created_by,
         created_at=c.created_at,
+        signed_off_by=c.signed_off_by,
+        signed_off_at=c.signed_off_at,
         snapshots=snaps,
     )
 
@@ -485,3 +489,35 @@ def list_applications(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 def set_owner(campaign_id: uuid.UUID, application_id: uuid.UUID, body: OwnerIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
     return _review_errors(lambda: review_service.set_app_owner(ctx.session, c, application_id, body.person_id, ctx.actor))
+
+
+# ---------------------------------------------------------------------------
+# Sign-off and evidence pack
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{campaign_id}/sign-off", response_model=CampaignOut)
+def sign_off(campaign_id: uuid.UUID, body: SignOffIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    _review_errors(lambda: review_service.sign_off(ctx.session, c, ctx.actor, body.statement))
+    return _campaign_out(ctx.session, c, with_snapshots=True)
+
+
+@router.post("/{campaign_id}/evidence-pack")
+def export_evidence_pack(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    """Build the evidence pack ZIP. Recorded in the ledger, so this is a POST."""
+    c = _load(ctx, campaign_id)
+    if c.state.value in ("draft", "ingesting", "resolving_identities"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Run the analysis before exporting evidence.")
+    try:
+        pack = export_service.build_evidence_pack(ctx.session, c, ctx.actor)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+    return Response(
+        content=pack.content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{pack.filename}"',
+            "X-Manifest-SHA256": pack.manifest_sha256,
+        },
+    )

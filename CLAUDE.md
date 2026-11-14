@@ -15,7 +15,7 @@ The full PRD ("UAR Copilot — PRD & Technical Blueprint", Nov 10 2026) is in `d
 (its embedded diagrams did not survive export). Its phases: 0 harden prototype → 1 MVP campaign → 2 GA (connectors, Slack/Teams,
 auditor portal, MSP console, AWS) → 3 continuous access monitoring → 4 SOC 2 platform.
 
-## Status (as of 2026-11-11)
+## Status (as of 2026-11-14)
 **Phase 0: done** (PR #1). Fail-closed Auth0, CORS allowlist, pinned deps, tiered privileged
 catalog in rules, grace-period rule, more operators, column-mapping transparency, tests, CI.
 
@@ -29,15 +29,11 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 2 + UI | #3 | Identity resolution with confidence + manual queue; campaign screens (React Router) |
 | 3 | #4 | Analysis: findings + one review item per account entitlement, reviewer assignment |
 | 4 | #5 | Reviewer queue: start review, keep/revoke/modify with justification rules, bulk keep (low/none only), self-review block, reassign, app owners |
+| 5 | #7 | Sign-off (→ remediating, or closed if nothing changes), evidence pack ZIP (PDF via fpdf2, CSVs, raw uploads, manifest of SHA-256s, jsonl ledger, README on verifying), Campaigns as home page (`/` → `/campaigns`, quick scan at `/scan`), Auth0 sign-in error banner |
 
-**Phase 1 remaining, in the recommended order** (user has not yet chosen; last recommendation was A):
-- A. **Evidence pack export** (PDF + CSV bundle: snapshots + hashes, mappings, findings, decisions with
-  actor/time, chain verification, campaign sign-off) **plus two UX fixes from user testing**:
-  1. Make Campaigns the home page; the old Quick scan page confused the user (they tried to upload
-     all three files there). Label Quick scan as a separate one-off tool.
-  2. Show Auth0's `?error=...&error_description=...` on the page after a failed sign-in (today it
-     is silently dropped).
-- B. Remediation: tickets (email/Jira) for revoke/modify, states remediating → verifying → closed.
+**Phase 1 remaining, in the recommended order:**
+- B. Remediation (next): tickets (email/Jira) for revoke/modify decisions; campaigns already land in
+  `remediating` after sign-off and need remediating → verifying → closed, with verification by re-upload.
 - C. Agent recommendations: Claude drafts keep/revoke + rationale citing finding IDs; schema-validated.
 - D. Reminders and escalation (email) to reviewers.
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
@@ -49,9 +45,9 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `rules.py` + `rule_registry.py` (versioned rules, `RULE_SET_VERSION`), `mapping.py` (column
   mapper), `privileged_access_catalog.py`, `db/models.py`, `db/session.py` (`tenant_session` sets
   `app.tenant_id` with SET LOCAL), `domain/` (`campaigns`, `evidence`, `ingest`, `identity`,
-  `analysis`, `review`, `tenants`), `api/campaigns.py` (all `/campaigns` routes).
+  `analysis`, `review` (incl. sign-off), `export` (evidence pack), `tenants`), `api/campaigns.py` (all `/campaigns` routes).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
-- **Migrations**: `backend/migrations/versions/0001..0003`. Run automatically at startup when
+- **Migrations**: `backend/migrations/versions/0001..0003` (slice 5 added no migration). Run automatically at startup when
   `DATABASE_URL` is set (`RUN_MIGRATIONS=false` opts out). Create new ones with
   `cd backend && alembic revision --autogenerate --rev-id 000N -m "..."`, then `alembic check`.
 - **Frontend**: React 19 + Vite + TS in `frontend/uar-ui/`. `src/App.tsx` (nav, routes, Quick scan

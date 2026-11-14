@@ -45,6 +45,32 @@ export function useApi() {
   )
 }
 
+/** POST that returns a file; saves it in the browser under the server's filename. */
+export function useDownload() {
+  const { getAccessTokenSilently } = useAuth0()
+
+  return useCallback(
+    async (path: string, fallbackName: string): Promise<string> => {
+      const headers = new Headers()
+      if (authEnabled) headers.set('Authorization', `Bearer ${await getAccessTokenSilently()}`)
+      const res = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', headers })
+      if (!res.ok) throw new ApiError(res.status, await readError(res))
+      const match = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')
+      const name = match?.[1] ?? fallbackName
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      return name
+    },
+    [getAccessTokenSilently],
+  )
+}
+
 // ---- Types mirroring the backend schemas ----
 
 export type ColumnMapping = {
@@ -81,6 +107,8 @@ export type Campaign = {
   rule_set_version: string | null
   created_by: string | null
   created_at: string | null
+  signed_off_by: string | null
+  signed_off_at: string | null
   snapshots: Snapshot[]
 }
 

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ApiError,
   useApi,
+  useDownload,
   type Analysis,
   type Application,
   type ReviewItem,
@@ -110,7 +111,8 @@ export default function CampaignDetailPage() {
 
       {error && <div className="error">{error}</div>}
 
-      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} reviewDone={Boolean(analysis?.progress?.complete && campaign.state === 'in_review')} />
+      <Steps hasHr={hasHr} hasAccess={hasAccess} identities={identities} analyzed={Boolean(analysis?.summary)} reviewDone={Boolean(analysis?.progress?.complete)}
+        signedOff={Boolean(campaign.signed_off_at)} exported={Boolean(evidence?.events.some((e) => e.type === 'evidence.exported'))} />
 
       <SourcesSection campaign={campaign} onChange={refresh} />
 
@@ -124,7 +126,7 @@ export default function CampaignDetailPage() {
 
       <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} people={people} onChange={refresh} />
 
-      <EvidenceSection evidence={evidence} />
+      <EvidenceSection campaign={campaign} evidence={evidence} onChange={refresh} />
     </div>
   )
 }
@@ -137,12 +139,16 @@ function Steps({
   identities,
   analyzed,
   reviewDone,
+  signedOff,
+  exported,
 }: {
   hasHr: boolean
   hasAccess: boolean
   identities: IdentityList | null
   analyzed: boolean
   reviewDone: boolean
+  signedOff: boolean
+  exported: boolean
 }) {
   const resolved = (identities?.summary.accounts ?? 0) > 0 && (identities?.summary.not_resolved ?? 0) === 0
   const ready = Boolean(identities?.summary.ready_for_analysis)
@@ -153,7 +159,9 @@ function Steps({
     { label: 'Resolve the queue', done: ready },
     { label: 'Run analysis', done: analyzed },
     { label: 'Review access', done: reviewDone },
-    { label: 'Remediate & export evidence', done: false, soon: true },
+    { label: 'Sign off', done: signedOff },
+    { label: 'Export evidence', done: exported },
+    { label: 'Remediate', done: false, soon: true },
   ]
   return (
     <ol className="steps">
@@ -404,7 +412,9 @@ function IdentitySection({
             />
           </div>
           {summary.ready_for_analysis ? (
-            <div className="notice">Every account is resolved. This campaign is ready for analysis.</div>
+            <div className="notice">
+              Every account is resolved.{campaign.state === 'resolving_identities' && ' This campaign is ready for analysis.'}
+            </div>
           ) : (
             <div className="attention-row">
               <span>{summary.open} account{summary.open === 1 ? '' : 's'} still need a decision.</span>
@@ -618,6 +628,8 @@ function AnalysisSection({
   const [pendingOnly, setPendingOnly] = useState(false)
 
   const inReview = campaign.state === 'in_review'
+  const reviewed = inReview || ['remediating', 'verifying', 'closed'].includes(campaign.state)
+  const [statement, setStatement] = useState('')
   const ready = Boolean(identities?.summary.ready_for_analysis)
   const canRun = ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
   const summary = analysis?.summary ?? null
@@ -650,15 +662,15 @@ function AnalysisSection({
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2>{inReview ? 'Access review' : 'Risk analysis'}</h2>
+        <h2>{reviewed ? 'Access review' : 'Risk analysis'}</h2>
         {summary?.rule_set_version && <span className="badge">Rules {summary.rule_set_version}</span>}
       </div>
       <p className="panel-text">
-        {inReview
+        {reviewed
           ? 'Decide on each item: keep, revoke, or modify. Keeping high or critical access needs a written justification. Low-risk items can be kept in bulk; high-risk items are always decided one at a time.'
           : 'The rules engine checks every account and entitlement against HR status and the privileged access catalog. Each entitlement becomes one review item, assigned to the person\'s manager.'}
       </p>
-      {!inReview && (
+      {!reviewed && (
         <div className="actions">
           <button type="button" className="primary" disabled={!canRun || busy !== null}
             onClick={() => call('analyze', `/campaigns/${campaign.id}/analyze`, { method: 'POST' })}>
@@ -678,7 +690,16 @@ function AnalysisSection({
       )}
       {error && <div className="error">{error}</div>}
 
-      {inReview && progress && (
+      {campaign.signed_off_at && (
+        <div className="notice">
+          Signed off by {campaign.signed_off_by} on {new Date(campaign.signed_off_at).toLocaleString()}.{' '}
+          {campaign.state === 'remediating'
+            ? `${(progress?.by_action.revoke ?? 0) + (progress?.by_action.modify ?? 0)} access change(s) still have to be made. Remediation tickets are coming next.`
+            : 'Campaign closed.'}
+        </div>
+      )}
+
+      {reviewed && progress && (
         <div className="progress-block">
           <div className="progress-head">
             <strong>{progress.decided} of {progress.total} decided</strong>
@@ -691,13 +712,38 @@ function AnalysisSection({
             aria-valuenow={progress.decided}>
             <span style={{ width: `${progress.total ? (100 * progress.decided) / progress.total : 0}%` }} />
           </div>
-          {progress.complete && <div className="notice">Every item has a decision.</div>}
+          {progress.complete && inReview && (
+            <form
+              className="signoff"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void call('signoff', `/campaigns/${campaign.id}/sign-off`, {
+                  method: 'POST', body: JSON.stringify({ statement: statement.trim() || null }),
+                })
+              }}
+            >
+              <strong>Every item has a decision. Ready to sign off?</strong>
+              <p className="hint">
+                Signing off records that the review is complete and locks all decisions. Revoked or modified access
+                then moves to remediation.
+              </p>
+              <label htmlFor="signoff-statement">Attestation (optional)</label>
+              <textarea id="signoff-statement" rows={2} maxLength={2000} value={statement}
+                onChange={(e) => setStatement(e.target.value)}
+                placeholder="e.g. Reviewed with IT; all decisions are final for Q4 2026." />
+              <div>
+                <button type="submit" className="primary" disabled={busy !== null}>
+                  {busy === 'signoff' ? 'Signing off…' : 'Sign off campaign'}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
 
       {summary && (
         <>
-          {!inReview && (
+          {!reviewed && (
             <>
               <div className="stat-row">
                 {SEVERITIES.map((s) => (
@@ -980,10 +1026,40 @@ function ReviewItemRow({
 
 // ---------------------------------------------------------------------------
 
-function EvidenceSection({ evidence }: { evidence: Evidence | null }) {
+const EXPORTABLE = new Set(['analyzing', 'in_review', 'remediating', 'verifying', 'closed'])
+
+function EvidenceSection({
+  campaign,
+  evidence,
+  onChange,
+}: {
+  campaign: Campaign
+  evidence: Evidence | null
+  onChange: () => Promise<void>
+}) {
+  const download = useDownload()
   const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   if (!evidence) return null
   const v = evidence.verification
+  const canExport = EXPORTABLE.has(campaign.state)
+  const draft = !campaign.signed_off_at
+
+  async function exportPack() {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const name = await download(`/campaigns/${campaign.id}/evidence-pack`, 'evidence-pack.zip')
+      setMessage({ kind: 'ok', text: `Downloaded ${name}. The export is recorded in the trail below.` })
+      await onChange()
+    } catch (err) {
+      setMessage({ kind: 'error', text: errorText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -996,7 +1072,22 @@ function EvidenceSection({ evidence }: { evidence: Evidence | null }) {
         Every action in this campaign is recorded here. Each event includes the hash of the one before it, so any
         later change to the record is detectable.
       </p>
-      <button type="button" className="ghost small" onClick={() => setOpen(!open)}>
+      <div className="export-box">
+        <div>
+          <strong>Evidence pack</strong>
+          <p className="hint">
+            A ZIP for your auditor: PDF summary, the uploaded files, identities, findings, every decision and this
+            trail, each with a SHA-256 fingerprint.
+            {draft && canExport && ' Until the campaign is signed off, the pack is marked DRAFT.'}
+            {!canExport && ' Available once the analysis has run.'}
+          </p>
+        </div>
+        <button type="button" className="primary" disabled={!canExport || busy} onClick={exportPack}>
+          {busy ? 'Preparing…' : draft ? 'Download draft pack' : 'Download evidence pack'}
+        </button>
+      </div>
+      {message && <div className={message.kind === 'error' ? 'error' : 'notice'}>{message.text}</div>}
+      <button type="button" className="ghost small events-toggle" onClick={() => setOpen(!open)}>
         {open ? 'Hide events' : 'Show events'}
       </button>
       {open && (

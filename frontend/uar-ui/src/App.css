@@ -1274,3 +1274,81 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
   align-items: center;
   flex-wrap: wrap;
 }
+
+.auth-error {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #fdecec;
+  border: 1px solid #f9c5c5;
+  color: #8f2c2c;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 24px;
+  overflow-wrap: anywhere;
+}
+
+.auth-error-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.subhead a {
+  color: var(--accent-strong);
+}
+
+.signoff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #b7dfd2;
+  background: #f3faf7;
+  border-radius: 12px;
+}
+
+.signoff p {
+  margin: 0;
+}
+
+.signoff label {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.signoff textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  resize: vertical;
+  min-width: 0;
+}
+
+.export-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.export-box > div {
+  flex: 1;
+  min-width: 220px;
+}
+
+.export-box p {
+  margin: 4px 0 0;
+}
+
+.events-toggle {
+  margin-top: 4px;
+}

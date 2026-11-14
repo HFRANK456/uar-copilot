@@ -9,3 +9,4 @@ SQLAlchemy==2.0.57
 alembic==1.20.1
 psycopg[binary]==3.3.8
 openpyxl==3.1.5
+fpdf2==2.9.0

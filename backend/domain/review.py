@@ -244,3 +244,30 @@ def review_progress(session: Session, campaign: Campaign) -> Dict[str, object]:
         "complete": total > 0 and pending == 0,
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def sign_off(session: Session, campaign: Campaign, actor: str, statement: Optional[str] = None) -> Dict[str, object]:
+    """The campaign owner attests the review is complete.
+
+    Needs every item decided. Campaigns with revoke or modify decisions move to
+    Remediating (the changes still have to be made and verified); campaigns
+    where everything was kept close straight away.
+    """
+    _require_in_review(campaign)
+    progress = review_progress(session, campaign)
+    if not progress["complete"]:
+        raise ReviewError(f"{progress['pending']} item(s) still need a decision before sign-off")
+    statement = (statement or "").strip() or None
+    changes = progress["by_action"]["revoke"] + progress["by_action"]["modify"]
+    campaign.signed_off_by = actor
+    campaign.signed_off_at = datetime.now(timezone.utc)
+    record_event(
+        session,
+        campaign,
+        "campaign.signed_off",
+        {"statement": statement, "decided": progress["decided"], "by_action": progress["by_action"],
+         "changes_to_remediate": changes},
+        actor,
+    )
+    transition(session, campaign, CampaignState.remediating if changes else CampaignState.closed, actor)
+    return {"state": campaign.state.value, "changes_to_remediate": changes}
