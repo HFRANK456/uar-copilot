@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ApiError,
+  SOURCE_LABELS,
   useApi,
+  useConnections,
   useDownload,
+  type SendTicketsResult,
   type Analysis,
   type Application,
   type Remediation,
@@ -201,6 +204,33 @@ function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: 
   const [busy, setBusy] = useState<string | null>(null)
   const [resetKey, setResetKey] = useState(0)
   const [message, setMessage] = useState<{ kind: 'error' | 'ok'; text: string; warnings?: string[] } | null>(null)
+  const { connections } = useConnections(canIngest)
+  const pullable = connections ?? []
+  const [connId, setConnId] = useState('')
+
+  async function pull() {
+    const conn = pullable.find((c) => c.id === connId)
+    if (!conn) return
+    setBusy('pull')
+    setMessage(null)
+    try {
+      const r = await api<IngestResult>(`/campaigns/${campaign.id}/sources/connection`, {
+        method: 'POST', body: JSON.stringify({ connection_id: conn.id }),
+      })
+      const c = r.counts
+      setMessage({
+        kind: 'ok',
+        text: `Pulled ${c.accounts} accounts with ${c.entitlement_grants} entitlement grants from ${conn.label}.`,
+        warnings: r.warnings,
+      })
+      setConnId('')
+      await onChange()
+    } catch (err) {
+      setMessage({ kind: 'error', text: `${conn.label}: ${errorText(err)}` })
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function upload(kind: 'hr' | 'access') {
     const file = kind === 'hr' ? hrFile : accessFile
@@ -236,7 +266,7 @@ function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: 
     <section className="panel">
       <div className="panel-header">
         <h2>Sources</h2>
-        <span className="badge">CSV / XLSX</span>
+        <span className="badge">Files or connections</span>
       </div>
       {!canIngest && (
         <p className="panel-text">
@@ -272,6 +302,29 @@ function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: 
             >
               {busy === 'access' ? 'Uploading…' : 'Upload access list'}
             </button>
+          </div>
+          <div className="upload-box">
+            <h3>Pull from a connection</h3>
+            {pullable.length === 0 ? (
+              <p className="panel-text">
+                Connect Google Workspace or Jira in <Link to="/workspace">Workspace settings</Link> to pull users and
+                their access directly, without exporting a file.
+              </p>
+            ) : (
+              <>
+                <p className="panel-text">Fetches current users and their admin roles or groups, read-only.</p>
+                <select className="text-input" value={connId} onChange={(e) => setConnId(e.target.value)}
+                  aria-label="Connection to pull from">
+                  <option value="">Choose a connection…</option>
+                  {pullable.map((c) => (
+                    <option key={c.id} value={c.id}>{c.label}{c.status === 'error' ? ' (not working)' : ''}</option>
+                  ))}
+                </select>
+                <button type="button" className="primary" disabled={!connId || busy !== null} onClick={pull}>
+                  {busy === 'pull' ? 'Pulling…' : 'Pull access list'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -320,7 +373,7 @@ function SnapshotRow({ campaignId, snapshot: s, onChange }: { campaignId: string
       <div className="snapshot-head">
         <span className="snapshot-kind">{s.kind === 'hr_roster' ? 'HR roster' : s.application}</span>
         <span className="snapshot-meta">
-          {s.filename} · {s.row_count} rows · sha256 <code title={s.sha256}>{s.sha256.slice(0, 12)}…</code>
+          {s.source && s.source !== 'upload' ? `via ${SOURCE_LABELS[s.source] ?? s.source}` : s.filename} · {s.row_count} rows · sha256 <code title={s.sha256}>{s.sha256.slice(0, 12)}…</code>
         </span>
         <button type="button" className="ghost small" onClick={() => setOpen(!open)}>
           {open ? 'Hide mapping' : 'Column mapping'}
@@ -1116,6 +1169,9 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
   const [verifyResult, setVerifyResult] = useState<VerifyResult['result'] | null>(null)
   const owner = campaign.is_owner
   const editable = owner && campaign.state === 'remediating'
+  const jira = (useConnections(editable).connections ?? []).filter((c) => c.can_create_tickets)
+  const [jiraId, setJiraId] = useState('')
+  const [sent, setSent] = useState<SendTicketsResult['result'] | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1193,7 +1249,36 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
                 'remediation-tickets.csv', 'GET'))}>
               Download tickets (CSV for Jira import)
             </button>
+            {editable && jira.length > 0 && (
+              <>
+                {jira.length > 1 && (
+                  <select value={jiraId} onChange={(e) => setJiraId(e.target.value)} aria-label="Jira connection">
+                    <option value="">Jira project…</option>
+                    {jira.map((c) => <option key={c.id} value={c.id}>{c.config.project_key} on {c.config.site?.replace('https://', '')}</option>)}
+                  </select>
+                )}
+                <button type="button" className="primary small"
+                  disabled={busy !== null || (jira.length > 1 && !jiraId) || data!.items.every((r) => r.ticket_ref || r.status === 'verified' || r.status === 'accepted')}
+                  onClick={() => run('jira', async () => {
+                    setSent(null)
+                    const r = await api<SendTicketsResult>(`/campaigns/${campaign.id}/remediations/send-tickets`, {
+                      method: 'POST', body: JSON.stringify({ connection_id: jiraId || jira[0].id }),
+                    })
+                    setSent(r.result)
+                  })}>
+                  {busy === 'jira' ? 'Sending…' : `Send to Jira${jira.length === 1 ? ` (${jira[0].config.project_key})` : ''}`}
+                </button>
+              </>
+            )}
           </div>
+          {sent && (
+            <div className={sent.error ? 'error' : 'notice'}>
+              {sent.created.length > 0
+                ? `Created ${sent.created.length} Jira ticket(s): ${sent.created.map((t) => t.ticket_ref).join(', ')}.`
+                : 'No new tickets: every open change already has one.'}
+              {sent.error && ` Stopped: ${sent.error}`}
+            </div>
+          )}
 
           <div className="rem-list">
             {data!.items.map((r) => (

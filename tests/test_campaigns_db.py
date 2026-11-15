@@ -61,14 +61,14 @@ def test_no_tenant_set_sees_nothing(db_engine, make_tenant):
 
 
 def test_every_tenant_table_has_forced_rls(db_engine):
-    from backend.db.models import TENANT_TABLES
+    from backend.db.models import RLS_TABLES
 
     with db_engine.connect() as conn:
         rows = conn.execute(
             text("select relname from pg_class where relrowsecurity and relforcerowsecurity and relname = any(:t)"),
-            {"t": TENANT_TABLES},
+            {"t": RLS_TABLES},
         ).scalars().all()
-    assert sorted(rows) == sorted(TENANT_TABLES)
+    assert sorted(rows) == sorted(RLS_TABLES)
 
 
 # ---------------------------------------------------------------------------

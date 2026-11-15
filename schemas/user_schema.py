@@ -82,6 +82,7 @@ class SnapshotOut(BaseModel):
     needs_confirmation: bool
     mapping_confirmed_by: Optional[str]
     created_at: Optional[_datetime] = None
+    source: str = "upload"  # "upload", or the connector kind that pulled it
 
 
 class CampaignOut(BaseModel):

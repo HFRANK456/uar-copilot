@@ -25,6 +25,10 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
             "privileged role administrator",
             "security administrator",
             "conditional access administrator",
+            "super admin",  # Google Workspace
+            "site-admins",  # Atlassian
+            "org-admins",  # Atlassian
+            "jira-system-administrators",
         },
         "cloud_administration": {
             "accountadmin",
@@ -44,6 +48,9 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
             "exchange administrator",
             "sharepoint administrator",
             "application administrator",
+            "groups admin",  # Google Workspace
+            "user management admin",  # Google Workspace
+            "jira-administrators",
         },
         "production_access": {
             "production admin",
@@ -57,6 +64,7 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
         "sensitive_access": {
             "power users",
             "helpdesk administrator",
+            "help desk admin",  # Google Workspace
             "billing administrator",
             "compliance administrator",
             "report reader",

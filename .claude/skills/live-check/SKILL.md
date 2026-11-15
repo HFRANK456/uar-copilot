@@ -63,6 +63,19 @@ to confirm a change works on the real site with real sign-in, and to report exac
 11. Open **Quick scan** in the nav: the page must say "Nothing is saved".
 12. Click **Workspace** (top right): the page lists the user as **owner**, with an invite form and a
     **New workspace** form. Don't invite anyone or create workspaces unless the user asks.
+13. On the same page, a **Connections** section shows "Add a connection" with Google Workspace and
+    Jira Cloud. Choosing one shows its setup steps and fields. **Don't add a connection** and never
+    type keys or tokens yourself: the user does that. If connections already exist, each shows
+    **Working**, **Not working** (with the reason) or **Not tested**; clicking **Test** is fine.
+    In a campaign still taking sources, the Sources section has a **Pull from a connection** box.
+
+## Checking a connection (only when the user asks, e.g. `/live-check pull from Jira`)
+The user adds the connection in **Workspace → Connections** themselves (they paste the token or
+choose the key file). Then, on a new campaign with `sample_hr_roster.csv` uploaded, **Pull access
+list** from that connection → "Pulled N accounts with M entitlement grants from …", and a new row
+under Sources says "via Google Workspace" or "via Jira Cloud". Report the counts and any warnings
+shown; they come from the user's real systems, so there are no fixed expected numbers. Don't run
+**Send to Jira** unless the user asks: it creates real tickets.
 
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any

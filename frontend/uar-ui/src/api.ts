@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
 import { API_BASE_URL, authEnabled } from './config'
 
@@ -125,6 +125,7 @@ export type Snapshot = {
   needs_confirmation: boolean
   mapping_confirmed_by: string | null
   created_at: string | null
+  source: string // 'upload' or a connector kind, e.g. 'google_workspace'
 }
 
 export type Campaign = {
@@ -331,4 +332,73 @@ export type Member = {
   invited_by: string | null
   accepted_at: string | null
   is_you: boolean
+}
+
+export type ConnectionKind = 'google_workspace' | 'jira_cloud'
+
+export type Connection = {
+  id: string
+  kind: ConnectionKind
+  label: string
+  name: string
+  config: {
+    admin_email?: string
+    service_account_email?: string
+    domain?: string
+    site?: string
+    email?: string
+    project_key?: string | null
+    issue_type?: string
+  }
+  status: 'untested' | 'ok' | 'error'
+  last_checked_at: string | null
+  last_error: string | null
+  created_by: string | null
+  created_at: string | null
+  can_create_tickets: boolean
+  message?: string
+}
+
+export type SendTicketsResult = {
+  result: { created: { remediation_id: string; ticket_ref: string }[]; already_had_ticket: number; error: string | null }
+  remediations: RemediationList
+}
+
+export const SOURCE_LABELS: Record<string, string> = {
+  upload: 'Uploaded file',
+  google_workspace: 'Google Workspace',
+  jira_cloud: 'Jira Cloud',
+}
+
+/** The workspace's connections, for owners and admins (everyone else gets an empty list). */
+export function useConnections(enabled: boolean) {
+  const api = useApi()
+  const [connections, setConnections] = useState<Connection[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    if (!enabled) {
+      setConnections([])
+      return
+    }
+    try {
+      setConnections(await api<Connection[]>('/connections'))
+      setError(null)
+    } catch (err) {
+      setConnections([])
+      setError(err instanceof Error ? err.message : 'Could not load connections')
+    }
+  }, [api, enabled])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve().then(() => {
+      if (!cancelled) void reload()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [reload])
+
+  return { connections, error, reload }
 }

@@ -33,13 +33,17 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | — | #8, #9 | `/live-check` skill (Claude in Chrome); fix for "Missing Refresh Token" after Auth0 login expiry (refresh-token fallback + redirect to sign in). Auth0 API now has Allow Offline Access on |
 | 6 | #10 | Reviewer authority (assigned reviewer decides; campaign owner = creator may decide instead with a recorded override reason; others 403; owner-only reassign/app owners/sign-off/remediation/close) and remediation (created at sign-off from revoke/modify; Jira-importable tickets CSV; ticket + mark done; verify by re-uploading an access list (`verification` snapshots, not campaign data); accept with reason; close → `closed`); pack adds remediations.csv and override columns |
 | 7 | #11 | Shared workspaces: `workspace_member` (owner/admin/reviewer/auditor; invited→active), personal workspace auto-created on first sign-in (existing `user:<sub>` tenants backfilled as owners), invites by email accepted in-app (no email sent yet), several workspaces per user (MSP) chosen with the `X-Workspace-Id` header, role checks on every campaign endpoint, workspace owners/admins count as campaign managers; UI workspace switcher, invitation banner, Workspace settings page, role-aware screens |
+| 8 | #12 | Connectors: `connection` table (migration 0006, RLS), credentials Fernet-encrypted with env `CONNECTOR_SECRET_KEY`, Google Workspace (service account + domain-wide delegation, read-only: users, suspended, last login, admin roles) and Jira Cloud (email + API token: users/app accounts with groups; creates remediation tickets). Workspace → Connections (owner/admin; add, test, remove); campaign Sources "Pull from a connection" (raw API JSON is the snapshot, `source.pulled` event); Remediation "Send to Jira". Catalog knows Google/Jira admin roles (rule set 2026.11.3) |
 
 **Phase 1 remaining, in the recommended order:**
-- B2. Send tickets to Jira / email directly (needs the user's Jira site + API token or an email
-  provider; ask which). Today tickets are a Jira-importable CSV.
+- B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
 - Invitation emails (today the owner tells people to sign in; needs an email provider, same as reminders).
-- **Connectors next (user asked, 2026-11-15): Jira and Workday** as data sources (Workday = HR roster,
-  Jira = tickets and possibly app access). Credentials per workspace, read-only scopes, recorded fixtures.
+- **Connectors, next ones** (decided 2026-11-15): Google Workspace and Jira Cloud are built (#12).
+  Recommended order after them: an HR source through a unified HRIS API (Merge or Finch) or
+  BambooHR directly, then Okta / Microsoft Entra ID, GitHub, AWS IAM Identity Center. Workday
+  directly only when a larger customer needs it. Also: verify remediation by re-pulling from a
+  connection (today verification needs an uploaded file), and expand Google admin roles assigned
+  to groups (today they produce a warning).
 - C. Agent recommendations: Claude drafts keep/revoke + rationale citing finding IDs; schema-validated.
 - D. Reminders and escalation (email) to reviewers.
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
@@ -51,9 +55,13 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `rules.py` + `rule_registry.py` (versioned rules, `RULE_SET_VERSION`), `mapping.py` (column
   mapper), `privileged_access_catalog.py`, `db/models.py`, `db/session.py` (`tenant_session` sets
   `app.tenant_id` with SET LOCAL), `domain/` (`campaigns`, `evidence`, `ingest`, `identity`,
-  `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack), `tenants`), `api/campaigns.py` (all `/campaigns` routes), `api/workspaces.py` (`/workspaces`).
+  `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack),
+  `workspaces`, `connections`), `connectors/` (`base` httpx client + errors, `secrets` Fernet,
+  `google_workspace`, `jira_cloud`), `api/campaigns.py` (all `/campaigns` routes),
+  `api/workspaces.py` (`/workspaces`), `api/connections.py` (`/connections`).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
-- **Migrations**: `backend/migrations/versions/0001..0005`. Run automatically at startup when
+- **Migrations**: `backend/migrations/versions/0001..0006`. A new tenant table must enable and force
+  RLS in its migration and be added to `RLS_TABLES` in `db/models.py` (not `TENANT_TABLES`). Run automatically at startup when
   `DATABASE_URL` is set (`RUN_MIGRATIONS=false` opts out). Create new ones with
   `cd backend && alembic revision --autogenerate --rev-id 000N -m "..."`, then `alembic check`.
 - **Frontend**: React 19 + Vite + TS in `frontend/uar-ui/`. `src/App.tsx` (nav, routes, Quick scan
@@ -66,7 +74,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   put in a contextvar by `ctx.activate()` inside `_load` (FastAPI runs the dependency and endpoint in
   different threads). `org_id` claims still map to an `org:<id>` workspace (role admin).
   Local dev: `AUTH_DISABLED=1` plus `LOCAL_DEV_SUB` / `LOCAL_DEV_EMAIL` to act as different users.
-- **Rules (2026.11.2)**: terminated_privileged_active (critical), terminated_active past grace
+- **Rules (2026.11.3)**: terminated_privileged_active (critical), terminated_active past grace
   (high), privileged_access_critical (high), terminated_active_within_grace (medium),
   privileged_access_high (medium), external_account_active (medium), privileged_access_medium (low),
   dormant_account >90 days (low), admin_role uncatalogued (low).
@@ -79,7 +87,9 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `tea-d7a5bu3uibrs73dgjn10`, region virginia), rootDir `backend`, start
   `uvicorn main:app --host 0.0.0.0 --port 10000`, auto-deploys from `main`,
   https://uar-copilot.onrender.com. Env: `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`,
-  `CORS_ORIGINS=https://uar-copilot.vercel.app`, `DATABASE_URL` (internal URL).
+  `CORS_ORIGINS=https://uar-copilot.vercel.app`, `DATABASE_URL` (internal URL),
+  `CONNECTOR_SECRET_KEY` (Fernet key for connection credentials; set after #12 merges; never change
+  it without re-adding connections).
 - **Database**: Render Postgres `uar-copilot-db` (`dpg-dbpr4o56e07s73b82po0-a`), **free plan,
   expires 2026-12-11**; upgrade before real customer data. External connections are blocked (empty
   IP allowlist), so it can't be queried from a sandbox; check Render logs instead.
@@ -107,6 +117,9 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   cluster was run with `/usr/lib/postgresql/16/bin/pg_ctl` on port 5433; it does not survive a new
   sandbox, so recreate role `uar_app` and databases `uar`/`uar_test` owned by it.
 - Frontend checks: `cd frontend/uar-ui && npm ci && npm run lint && npm run build`.
+- Connector tests use `httpx.MockTransport` through `backend.connectors.base.transport_factory`;
+  the sandbox can't reach Google or Atlassian. For a browser check of connectors, start the backend
+  from a script that sets `transport_factory` to the tests' handlers (`tests/test_connectors.py`).
 - Browser check: run backend with `AUTH_DISABLED=1 DATABASE_URL=...` on :8000 and
   `VITE_API_BASE_URL=http://localhost:8000 npx vite` with empty `VITE_AUTH0_*`, then drive with
   Playwright. This caught a real bug (CORS lacked PUT).
