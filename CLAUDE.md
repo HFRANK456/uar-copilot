@@ -88,7 +88,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `uvicorn main:app --host 0.0.0.0 --port 10000`, auto-deploys from `main`,
   https://uar-copilot.onrender.com. Env: `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`,
   `CORS_ORIGINS=https://uar-copilot.vercel.app`, `DATABASE_URL` (internal URL),
-  `CONNECTOR_SECRET_KEY` (Fernet key for connection credentials; set after #12 merges; never change
+  `CONNECTOR_SECRET_KEY` (Fernet key for connection credentials; set 2026-11-15; never change
   it without re-adding connections).
 - **Database**: Render Postgres `uar-copilot-db` (`dpg-dbpr4o56e07s73b82po0-a`), **free plan,
   expires 2026-12-11**; upgrade before real customer data. External connections are blocked (empty
