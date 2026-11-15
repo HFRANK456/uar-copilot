@@ -5,10 +5,14 @@ import uuid
 from typing import Iterator, List
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.auth import require_auth
+from backend.connectors.base import ConnectorError
+from backend.connectors.secrets import SecretsUnavailable
 from backend.db.models import (
     Account,
     AccountEntitlement,
@@ -27,6 +31,7 @@ from backend.db.models import (
 from backend.db.session import get_engine, tenant_session
 from backend.domain import analysis as analysis_service
 from backend.domain import campaigns as campaign_service
+from backend.domain import connections as connection_service
 from backend.domain import export as export_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
@@ -118,6 +123,7 @@ def _snapshot_out(session: Session, snap: SourceSnapshot) -> SnapshotOut:
         needs_confirmation=ingest_service.snapshot_needs_confirmation(snap),
         mapping_confirmed_by=snap.mapping_confirmed_by,
         created_at=snap.created_at,
+        source=snap.source or "upload",
     )
 
 
@@ -225,6 +231,42 @@ def ingest_access(
         warnings=result.warnings,
         campaign_state=c.state.value,
     )
+
+
+class PullIn(BaseModel):
+    connection_id: uuid.UUID
+    application: str | None = None
+
+
+def _connector_call(fn):
+    """Run a connector-backed action. A connector failure becomes a 422 returned (not raised),
+    so the connection's saved error status commits; nothing else was written by then."""
+    try:
+        return fn()
+    except ConnectorError as exc:
+        return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content={"detail": str(exc)})
+    except SecretsUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.post("/{campaign_id}/sources/connection", status_code=status.HTTP_201_CREATED)
+def pull_from_connection(campaign_id: uuid.UUID, body: PullIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "pull access lists")
+
+    def run():
+        result = connection_service.pull_into_campaign(ctx.session, c, body.connection_id, ctx.actor, body.application)
+        return IngestOut(snapshot=_snapshot_out(ctx.session, result.snapshot), counts=result.counts,
+                         warnings=result.warnings, campaign_state=c.state.value)
+
+    try:
+        return _connector_call(run)
+    except campaign_service.InvalidTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ingest_service.IngestError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.post("/{campaign_id}/sources/{snapshot_id}/confirm-mapping", response_model=SnapshotOut)
@@ -596,6 +638,22 @@ def verify_remediations(campaign_id: uuid.UUID, application_id: uuid.UUID = Form
     result = _review_errors(lambda: remediation_service.verify_with_upload(
         ctx.session, c, application_id, raw, file.filename, ctx.actor))
     return {"result": result, "remediations": _remediations(ctx, c)}
+
+
+class SendTicketsIn(BaseModel):
+    connection_id: uuid.UUID
+
+
+@router.post("/{campaign_id}/remediations/send-tickets")
+def send_remediation_tickets(campaign_id: uuid.UUID, body: SendTicketsIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "send tickets")
+
+    def run():
+        result = connection_service.send_tickets(ctx.session, c, body.connection_id, ctx.actor)
+        return {"result": result, "remediations": _remediations(ctx, c)}
+
+    return _review_errors(lambda: _connector_call(run))
 
 
 @router.post("/{campaign_id}/remediations/{rem_id}")

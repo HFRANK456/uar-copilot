@@ -1550,3 +1550,53 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
     flex-wrap: wrap;
   }
 }
+
+/* Connections (workspace settings) */
+.connection-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  max-width: 640px;
+}
+
+.setup-steps {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 0.9rem;
+}
+
+.setup-steps summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.setup-steps ol {
+  margin: 10px 0 6px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setup-steps .scopes {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+.panel .notice + .list,
+.panel .error + .list {
+  margin-top: 12px;
+}

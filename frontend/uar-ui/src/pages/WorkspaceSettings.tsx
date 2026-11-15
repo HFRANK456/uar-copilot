@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi, type Member, type WorkspaceRole } from '../api'
-import { useWorkspace } from '../workspace'
+import { canManage, useWorkspace } from '../workspace'
+import { ConnectionsPanel } from './Connections'
 
 const ROLES: { value: WorkspaceRole; label: string; help: string }[] = [
   { value: 'reviewer', label: 'Reviewer', help: 'Sees campaigns and decides the items assigned to them' },
@@ -186,6 +187,8 @@ export default function WorkspaceSettingsPage() {
           </form>
         </div>
       </section>
+
+      {canManage(current) && <ConnectionsPanel />}
     </div>
   )
 }

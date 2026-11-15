@@ -427,6 +427,26 @@ class Rule(TenantOwned, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Connection(TenantOwned, Base):
+    """A workspace's link to an external system (Google Workspace, Jira Cloud, ...).
+
+    `config` holds non-secret settings shown in the UI (domain, site, project key).
+    `secret` holds the credentials, encrypted with CONNECTOR_SECRET_KEY; it is never
+    returned by the API.
+    """
+
+    __tablename__ = "connection"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    kind: Mapped[str] = mapped_column(String(50))  # google_workspace | jira_cloud
+    name: Mapped[str] = mapped_column(String(255))
+    config: Mapped[Any] = mapped_column(JsonType, default=dict)
+    secret: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
+    status: Mapped[str] = mapped_column(String(20), default="untested")  # untested | ok | error
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+
+
 TENANT_TABLES = [
     t.__tablename__
     for t in (
@@ -435,3 +455,6 @@ TENANT_TABLES = [
     )
 ]
 APPEND_ONLY_TABLES = ["decision", "evidence_event"]
+# Every table with forced row-level security, including ones added after migration 0001
+# (which reads TENANT_TABLES itself, so that list must not grow).
+RLS_TABLES = TENANT_TABLES + ["connection"]

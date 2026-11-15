@@ -130,13 +130,14 @@ def _snapshot(
     df: pd.DataFrame,
     mappings: List[ColumnMapping],
     application: Optional[Application],
+    source: str = "upload",
 ) -> SourceSnapshot:
     snap = SourceSnapshot(
         tenant_id=campaign.tenant_id,
         campaign_id=campaign.id,
         kind=kind,
         application_id=application.id if application else None,
-        source="upload",
+        source=source,
         filename=filename,
         content=raw,
         size_bytes=len(raw),
@@ -305,9 +306,26 @@ def ingest_access_list(
         else:
             raise IngestError("access list needs a user ID, username or email column")
 
+    return load_access_frame(session, campaign, application_name, df, raw, filename, mappings, actor)
+
+
+def load_access_frame(
+    session: Session,
+    campaign: Campaign,
+    application_name: str,
+    df: pd.DataFrame,
+    raw: bytes,
+    filename: Optional[str],
+    mappings: List[ColumnMapping],
+    actor: str,
+    source: str = "upload",
+) -> IngestResult:
+    """Load canonical access-list rows (native_id, username, email, display_name, status, role,
+    last_login) into a campaign. `raw` is stored byte-for-byte as the snapshot, so a connector's
+    raw API response is fingerprinted exactly like an uploaded file."""
     _prepare_campaign(session, campaign, actor)
     app = _get_or_create_application(session, campaign, application_name, actor)
-    snap = _snapshot(session, campaign, SourceKind.access_list, raw, filename, actor, df, mappings, app)
+    snap = _snapshot(session, campaign, SourceKind.access_list, raw, filename, actor, df, mappings, app, source)
 
     accounts: Dict[str, Account] = {}
     ent_cache: Dict[str, Entitlement] = {}
@@ -369,7 +387,7 @@ def ingest_access_list(
             1 for a in accounts.values() if a.account_type in (AccountType.service, AccountType.shared)
         ),
     }
-    _record_ingest(session, campaign, snap, mappings, counts, actor, application=app.name)
+    _record_ingest(session, campaign, snap, mappings, counts, actor, application=app.name, source=source)
     return IngestResult(snap, mappings, counts, warnings[:50])
 
 
@@ -381,6 +399,7 @@ def _record_ingest(
     counts: Dict[str, int],
     actor: str,
     application: Optional[str] = None,
+    source: str = "upload",
 ) -> None:
     record_event(
         session,
@@ -389,6 +408,7 @@ def _record_ingest(
         {
             "snapshot_id": snap.id,
             "kind": snap.kind.value,
+            "source": source,
             "application": application,
             "filename": snap.filename,
             "sha256": snap.sha256,

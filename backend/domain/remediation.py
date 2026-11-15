@@ -309,12 +309,12 @@ def close_campaign(session: Session, campaign: Campaign, actor: str) -> Dict[str
 # ---------------------------------------------------------------------------
 
 
-def tickets_csv(session: Session, campaign: Campaign) -> bytes:
-    """Open remediations as a CSV that Jira's importer (and most ticket tools) accept."""
-    buf = io.StringIO()
-    w = csv.writer(buf, lineterminator="\n")
-    w.writerow(["Summary", "Description", "Issue Type", "Priority", "Labels", "External ID"])
-    priority = {"critical": "Highest", "high": "High", "medium": "Medium", "low": "Low"}
+PRIORITY = {"critical": "Highest", "high": "High", "medium": "Medium", "low": "Low"}
+
+
+def ticket_texts(session: Session, campaign: Campaign) -> List[Dict[str, Any]]:
+    """Summary and description for each open remediation, shared by the CSV and the Jira connector."""
+    out = []
     for r in rows(session, campaign):
         if r["status"] not in OPEN_STATES:
             continue
@@ -326,6 +326,17 @@ def tickets_csv(session: Session, campaign: Campaign) -> bytes:
                 f"Entitlement: {r['entitlement']}\nRisk: {r['severity']}\nDecided by: {r['decided_by']}\n"
                 + (f"Requested change: {r['change']}\n" if r["action"] == "modify" and r["change"] else "")
                 + "When done, record it in UAR Copilot; it will be confirmed against the next access list upload.")
-        w.writerow([summary_text, desc, "Task", priority.get(r["severity"], "Medium"), "access-review",
-                    str(r["id"])])
+        out.append({"remediation": r, "summary": summary_text, "description": desc,
+                    "priority": PRIORITY.get(r["severity"], "Medium")})
+    return out
+
+
+def tickets_csv(session: Session, campaign: Campaign) -> bytes:
+    """Open remediations as a CSV that Jira's importer (and most ticket tools) accept."""
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["Summary", "Description", "Issue Type", "Priority", "Labels", "External ID"])
+    for t in ticket_texts(session, campaign):
+        w.writerow([t["summary"], t["description"], "Task", t["priority"], "access-review",
+                    str(t["remediation"]["id"])])
     return buf.getvalue().encode("utf-8")

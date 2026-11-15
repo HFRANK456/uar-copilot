@@ -1,7 +1,7 @@
 # UAR Copilot
 
 User access review copilot. Deterministic rules engine (FastAPI) plus a React/Vite UI.
-See the PRD for the roadmap; this repo currently implements Phase 0 (hardened prototype).
+See the PRD (`docs/PRD.md`) for the roadmap; this repo implements Phase 0 and the Phase 1 campaign flow.
 
 ## Backend
 
@@ -18,6 +18,7 @@ AUTH_DISABLED=true uvicorn backend.main:app --reload   # local dev only
 | `CORS_ORIGINS` | Yes (deployed) | Comma-separated frontend origins, e.g. `https://uar-copilot.vercel.app`. `*` is ignored |
 | `TERMINATION_GRACE_BUSINESS_DAYS` | No | Default `1`. Terminated-but-active within this window is `medium`, after it `high` |
 | `LOG_LEVEL` | No | Default `INFO`. Logs are JSON and never contain row contents |
+| `CONNECTOR_SECRET_KEY` | For connections | Fernet key that encrypts connection credentials at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, adding a connection returns 503. Changing it makes saved connections unreadable (re-add them) |
 
 ## Frontend (`frontend/uar-ui`)
 
@@ -73,3 +74,30 @@ can belong to several workspaces (e.g. an MSP with one per client); the browser 
 | `GET/POST /workspaces/{id}/members` | List / invite (owner) |
 | `PATCH/DELETE /workspaces/{id}/members/{member}` | Change role / remove (owner; a workspace keeps at least one owner) |
 | `POST /workspaces/{id}/invitation/accept` or `/decline` | Answer an invitation |
+
+## Connections (Google Workspace, Jira Cloud)
+
+Workspace owners and admins connect systems under **Workspace → Connections**; a campaign can then
+**Pull from a connection** instead of uploading a file. Credentials are encrypted with
+`CONNECTOR_SECRET_KEY` and never returned by the API. Code: `backend/connectors/` (one module per
+system with `validate`, `test`, `pull`), `backend/domain/connections.py`, `backend/api/connections.py`.
+
+| System | Credentials | Pulls | Writes |
+| --- | --- | --- | --- |
+| Google Workspace | Service account JSON key with domain-wide delegation for the read-only scopes `admin.directory.user.readonly` and `admin.directory.rolemanagement.readonly`, plus an admin email to act as | Every user (suspended/archived → inactive, last sign-in) and each admin role as an entitlement | Nothing |
+| Jira Cloud | Site, Atlassian account email, API token; optional project key | Atlassian and app (bot) accounts with their groups as entitlements; portal customers skipped. No last-login in Jira's API, and hidden emails fall back to name matching | Remediation tickets in the chosen project (**Send to Jira**), only when clicked |
+
+A pull is stored like an upload: the raw API responses (JSON) are the snapshot, hashed and included
+in the evidence pack, and the ledger gets `source.ingested` plus `source.pulled`. Tickets sent to
+Jira set each remediation's ticket number and record `remediation.ticket_sent`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET/POST /connections` | List / add (owner, admin) |
+| `POST /connections/{id}/test` | Check the credentials; saves status `ok` or `error` |
+| `DELETE /connections/{id}` | Remove (data already pulled stays in campaigns) |
+| `POST /campaigns/{id}/sources/connection` | `{connection_id, application?}`: pull an access list |
+| `POST /campaigns/{id}/remediations/send-tickets` | `{connection_id}`: a Jira ticket per open change without one |
+
+Tests run the connectors against recorded-format responses through `httpx.MockTransport`
+(`backend.connectors.base.transport_factory`); nothing calls Google or Atlassian.
