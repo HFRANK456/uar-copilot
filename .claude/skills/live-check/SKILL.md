@@ -77,6 +77,31 @@ under Sources says "via Google Workspace" or "via Jira Cloud". Report the counts
 shown; they come from the user's real systems, so there are no fixed expected numbers. Don't run
 **Send to Jira** unless the user asks: it creates real tickets.
 
+## Setting up a free test Jira (only when the user asks, e.g. `/live-check set up Jira`)
+Goal: a free Jira Cloud site connected to UAR Copilot, proven with a real pull and real tickets.
+The user does every step that involves their identity or a secret; you do the clicking around it.
+1. Ask whether they already have an Atlassian account. If not, open
+   https://www.atlassian.com/software/jira/free and **hand over**: the user enters their email,
+   password and the verification code themselves. Wait until they say they're signed in.
+2. Help them finish Jira's first-run screens: site name (suggest `uarcopilot-test`, or what they
+   like), skip inviting teammates, create a project from any template (suggest key `IT`).
+   Note the site address (`….atlassian.net`) and the project key.
+3. Open https://id.atlassian.com/manage-profile/security/api-tokens. Ask the user to click
+   **Create API token**, name it "UAR Copilot", and **copy it themselves**. Never read the token
+   from the screen, copy it, or type it anywhere.
+4. Open https://uar-copilot.vercel.app/workspace → **Connections** → **Add a connection** →
+   **Jira Cloud**. Fill in the site, the user's Atlassian email and the project key. Then ask the
+   user to click into **API token** and paste it. Click **Connect and test** → expect
+   "Jira Cloud connected. Signed in to https://….atlassian.net as <their name>." and **Working**.
+5. Prove the pull: new campaign `Jira check <YYYY-MM-DD HH:MM>`, upload `sample_hr_roster.csv`,
+   **Pull from a connection** → Jira Cloud → "Pulled N accounts … from Jira Cloud" (a fresh free
+   site has the user plus a few Atlassian app accounts; report N and the warnings).
+6. Prove tickets (creates real tickets in the test site only, so confirm with the user first): on
+   a campaign that is in **Remediating** with open changes (the standard flow's campaign after
+   step 8 works), click **Send to Jira (IT)** → "Created N Jira ticket(s): IT-1 …". Open the
+   Jira project and confirm the tickets are there with the label `access-review`.
+If anything fails, report the exact message the Connections list shows under **Not working**.
+
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any
 error, a screenshot of anything that failed, and the campaign name you used. If something failed,
