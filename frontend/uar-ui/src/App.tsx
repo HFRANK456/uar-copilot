@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Analytics } from '@vercel/analytics/react'
 import { useAuth0 } from '@auth0/auth0-react'
-import { Link, Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import CampaignsPage from './pages/Campaigns'
 import CampaignDetailPage from './pages/CampaignDetail'
 import './App.css'
 import { API_BASE_URL, authEnabled } from './config'
-import { useToken } from './api'
+import { useApi, useToken } from './api'
+import { useWorkspace, WorkspaceProvider } from './workspace'
+import WorkspaceSettingsPage from './pages/WorkspaceSettings'
 
 const API_URL = `${API_BASE_URL}/upload`
 
@@ -491,9 +493,82 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   )
 }
 
+function WorkspaceSwitcher() {
+  const { workspaces, current, select } = useWorkspace()
+  const navigate = useNavigate()
+  const { isAuthenticated } = useAuth0()
+  if ((authEnabled && !isAuthenticated) || !current) return null
+  return (
+    <div className="ws-switch">
+      {workspaces.length > 1 ? (
+        <select aria-label="Workspace" value={current.id} onChange={(e) => {
+          select(e.target.value)
+          navigate('/campaigns')
+        }}>
+          {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}
+        </select>
+      ) : (
+        <span className="ws-name" title={`You are ${current.role} here`}>{current.name}</span>
+      )}
+      <NavLink to="/workspace" className="ws-settings">Workspace</NavLink>
+    </div>
+  )
+}
+
+function InvitationBanner() {
+  const { invitations, refresh, select } = useWorkspace()
+  const api = useApi()
+  const navigate = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (invitations.length === 0) return null
+
+  async function answer(id: string, accept: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`/workspaces/${id}/invitation/${accept ? 'accept' : 'decline'}`, { method: 'POST' })
+      await refresh()
+      if (accept) {
+        select(id)
+        navigate('/campaigns')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="invites">
+      {invitations.map((w) => (
+        <div key={w.id} className="invite" role="status">
+          <span>
+            <strong>{w.invited_by ?? 'Someone'}</strong> invited you to <strong>{w.name}</strong> as {w.role}.
+          </span>
+          <span className="invite-actions">
+            <button type="button" className="primary small" disabled={busy} onClick={() => answer(w.id, true)}>Join</button>
+            <button type="button" className="ghost small" disabled={busy} onClick={() => answer(w.id, false)}>Decline</button>
+          </span>
+        </div>
+      ))}
+      {error && <div className="error">{error}</div>}
+    </div>
+  )
+}
+
+/** Remount workspace-scoped pages when the workspace changes, so nothing from the old one lingers. */
+function Scoped({ children }: { children: React.ReactNode }) {
+  const { current, loading, error } = useWorkspace()
+  if (error) return <div className="error">{error}</div>
+  if (loading || !current) return <p className="panel-text">Loading workspace…</p>
+  return <div key={current.id}>{children}</div>
+}
+
 export default function App() {
   return (
-    <>
+    <WorkspaceProvider>
       <nav className="topnav">
         <Link to="/campaigns" className="brand">UAR Copilot</Link>
         <div className="nav-links">
@@ -501,16 +576,19 @@ export default function App() {
           <NavLink to="/scan">Quick scan</NavLink>
         </div>
         <div className="nav-auth">
+          <WorkspaceSwitcher />
           <AuthBar />
         </div>
       </nav>
       <AuthErrorBanner />
+      <InvitationBanner />
       <main>
         <Routes>
           <Route path="/" element={<Navigate to={`/campaigns${window.location.search}`} replace />} />
           <Route path="/scan" element={<AppMain />} />
-          <Route path="/campaigns" element={<RequireAuth><CampaignsPage /></RequireAuth>} />
-          <Route path="/campaigns/:id" element={<RequireAuth><CampaignDetailPage /></RequireAuth>} />
+          <Route path="/campaigns" element={<RequireAuth><Scoped><CampaignsPage /></Scoped></RequireAuth>} />
+          <Route path="/campaigns/:id" element={<RequireAuth><Scoped><CampaignDetailPage /></Scoped></RequireAuth>} />
+          <Route path="/workspace" element={<RequireAuth><Scoped><WorkspaceSettingsPage /></Scoped></RequireAuth>} />
           <Route path="*" element={<div className="empty"><p>Page not found.</p></div>} />
         </Routes>
       </main>
@@ -519,6 +597,6 @@ export default function App() {
         <span>API: {API_BASE_URL}</span>
       </footer>
       <Analytics />
-    </>
+    </WorkspaceProvider>
   )
 }

@@ -179,7 +179,11 @@ def require_auth(
     verification is the explicit AUTH_DISABLED=true flag for local development.
     """
     if auth_disabled():
-        return {"sub": "local-dev", "auth_disabled": True}
+        # Local development only: LOCAL_DEV_SUB / LOCAL_DEV_EMAIL let you act as different users.
+        principal = {"sub": os.getenv("LOCAL_DEV_SUB", "local-dev"), "auth_disabled": True}
+        if os.getenv("LOCAL_DEV_EMAIL"):
+            principal["email"] = os.getenv("LOCAL_DEV_EMAIL")
+        return principal
 
     settings = get_auth0_settings()
     if not settings.enabled:

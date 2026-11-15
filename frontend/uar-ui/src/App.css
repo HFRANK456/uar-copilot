@@ -1456,3 +1456,97 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
     gap: 6px;
   }
 }
+
+/* ---------- Workspaces ---------- */
+
+.ws-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ws-switch select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-width: 220px;
+}
+
+.ws-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topnav a.ws-settings {
+  font-size: 0.85rem;
+}
+
+.invites {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.invite {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid #b7dfd2;
+  background: #e6f4ef;
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+
+.invite-actions,
+.member-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.member-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.member-actions select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.stack .panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .ws-switch {
+    flex-wrap: wrap;
+  }
+}
