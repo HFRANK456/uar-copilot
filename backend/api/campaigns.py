@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Iterator, List
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,8 @@ from backend.domain import ingest as ingest_service
 from backend.domain import remediation as remediation_service
 from backend.domain import review as review_service
 from backend.domain.evidence import verify_chain
-from backend.domain.tenants import resolve_tenant
+from backend.domain import workspaces as workspace_service
+from backend.domain.workspaces import EVERYONE, MANAGERS, WorkspaceRole
 from schemas.user_schema import (
     ApplicationOut,
     BulkKeepIn,
@@ -67,24 +68,40 @@ MAX_UPLOAD_BYTES = ingest_service.MAX_FILE_BYTES
 
 
 class Ctx:
-    def __init__(self, session: Session, tenant_id: uuid.UUID, actor: str, email: str | None = None):
+    def __init__(self, session: Session, tenant_id: uuid.UUID, actor: str, email: str | None = None,
+                 role: WorkspaceRole | None = None):
         self.session = session
         self.tenant_id = tenant_id
         self.actor = actor
         self.email = email
+        self.role = role
+
+    def activate(self) -> None:
+        """Make the caller's workspace role visible to domain code for this request.
+
+        FastAPI runs a sync dependency and the endpoint in different worker threads,
+        so this is called from the endpoint (via _load) rather than in get_ctx.
+        """
+        workspace_service.current_role.set(self.role)
+
+    def need(self, allowed: set, what: str) -> None:
+        if self.role not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                f"your role in this workspace ({self.role.value if self.role else 'none'}) can't {what}")
 
 
-def get_ctx(principal: dict = Depends(require_auth)) -> Iterator[Ctx]:
+def get_ctx(principal: dict = Depends(require_auth),
+            x_workspace_id: str | None = Header(default=None)) -> Iterator[Ctx]:
     engine = get_engine()
     if engine is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Campaigns need a database; DATABASE_URL is not set.")
     try:
-        tenant_id = resolve_tenant(engine, principal)
+        membership = workspace_service.resolve(engine, principal, x_workspace_id)
     except PermissionError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     actor = str(principal.get("email") or principal.get("sub") or "unknown")
-    with tenant_session(tenant_id, engine) as session:
-        yield Ctx(session, tenant_id, actor, principal.get("email"))
+    with tenant_session(membership.tenant_id, engine) as session:
+        yield Ctx(session, membership.tenant_id, actor, principal.get("email"), membership.role)
 
 
 def _snapshot_out(session: Session, snap: SourceSnapshot) -> SnapshotOut:
@@ -130,6 +147,7 @@ def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False, a
 
 
 def _load(ctx: Ctx, campaign_id: uuid.UUID) -> Campaign:
+    ctx.activate()
     try:
         return campaign_service.get_campaign(ctx.session, campaign_id)
     except campaign_service.NotFound as exc:
@@ -145,6 +163,8 @@ def _read_upload(upload: UploadFile) -> bytes:
 
 @router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
 def create_campaign(body: CampaignCreate, ctx: Ctx = Depends(get_ctx)):
+    ctx.activate()
+    ctx.need(MANAGERS, "create campaigns")
     try:
         c = campaign_service.create_campaign(ctx.session, ctx.tenant_id, ctx.actor, **body.model_dump())
     except ValueError as exc:
@@ -154,6 +174,7 @@ def create_campaign(body: CampaignCreate, ctx: Ctx = Depends(get_ctx)):
 
 @router.get("", response_model=List[CampaignOut])
 def list_campaigns(ctx: Ctx = Depends(get_ctx)):
+    ctx.activate()
     rows = ctx.session.scalars(select(Campaign).order_by(Campaign.created_at.desc()))
     return [_campaign_out(ctx.session, c, actor=ctx.actor) for c in rows]
 
@@ -167,6 +188,7 @@ def get_campaign(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 def ingest_hr(campaign_id: uuid.UUID, file: UploadFile = File(...), ctx: Ctx = Depends(get_ctx)):
     raw = _read_upload(file)
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "upload files")
     try:
         result = ingest_service.ingest_hr_roster(ctx.session, c, raw, file.filename, ctx.actor)
     except campaign_service.InvalidTransition as exc:
@@ -190,6 +212,7 @@ def ingest_access(
 ):
     raw = _read_upload(file)
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "upload files")
     try:
         result = ingest_service.ingest_access_list(ctx.session, c, application, raw, file.filename, ctx.actor)
     except campaign_service.InvalidTransition as exc:
@@ -207,6 +230,7 @@ def ingest_access(
 @router.post("/{campaign_id}/sources/{snapshot_id}/confirm-mapping", response_model=SnapshotOut)
 def confirm_mapping(campaign_id: uuid.UUID, snapshot_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "confirm column mappings")
     try:
         snap = ingest_service.confirm_mapping(ctx.session, c, snapshot_id, ctx.actor)
     except LookupError as exc:
@@ -299,6 +323,7 @@ def _identity_list(ctx: Ctx, c: Campaign, status_filter: str | None = None) -> I
 @router.post("/{campaign_id}/identities/resolve", response_model=IdentityListOut)
 def resolve_identities(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "run identity matching")
     try:
         identity_service.resolve_identities(ctx.session, c, ctx.actor)
     except campaign_service.InvalidTransition as exc:
@@ -316,6 +341,7 @@ def list_identities(campaign_id: uuid.UUID, status_filter: str | None = None, ct
 @router.post("/{campaign_id}/identities/{account_id}", response_model=IdentityItemOut)
 def confirm_identity(campaign_id: uuid.UUID, account_id: uuid.UUID, body: IdentityConfirm, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "decide identities")
     try:
         identity_service.confirm_link(
             ctx.session,
@@ -414,6 +440,7 @@ def _decision_out(d) -> DecisionOut:
 @router.post("/{campaign_id}/analyze", response_model=AnalysisOut)
 def run_analysis(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "run analysis")
     try:
         analysis_service.analyze(ctx.session, c, ctx.actor)
     except campaign_service.InvalidTransition as exc:
@@ -457,6 +484,7 @@ def _review_errors(fn):
 @router.post("/{campaign_id}/review/start", response_model=AnalysisOut)
 def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "start the review")
     _review_errors(lambda: review_service.launch_review(ctx.session, c, ctx.actor))
     return _analysis(ctx, c)
 
@@ -464,6 +492,7 @@ def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 @router.post("/{campaign_id}/review-items/{item_id}/decision", response_model=DecisionOut)
 def decide(campaign_id: uuid.UUID, item_id: uuid.UUID, body: DecisionIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(EVERYONE - {WorkspaceRole.auditor}, "decide review items")
     d = _review_errors(lambda: review_service.decide(
         ctx.session, c, item_id, ctx.actor, ctx.email, ReviewAction(body.action), body.justification,
         override_reason=body.override_reason))
@@ -473,6 +502,7 @@ def decide(campaign_id: uuid.UUID, item_id: uuid.UUID, body: DecisionIn, ctx: Ct
 @router.post("/{campaign_id}/review-items/bulk-keep")
 def bulk_keep(campaign_id: uuid.UUID, body: BulkKeepIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(EVERYONE - {WorkspaceRole.auditor}, "decide review items")
     return _review_errors(lambda: review_service.bulk_keep(ctx.session, c, body.item_ids, ctx.actor, ctx.email,
                                                            body.override_reason))
 
@@ -480,6 +510,7 @@ def bulk_keep(campaign_id: uuid.UUID, body: BulkKeepIn, ctx: Ctx = Depends(get_c
 @router.post("/{campaign_id}/review-items/{item_id}/reassign", response_model=ReviewItemOut)
 def reassign(campaign_id: uuid.UUID, item_id: uuid.UUID, body: ReassignIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "reassign reviewers")
     _review_errors(lambda: review_service.reassign(ctx.session, c, item_id, body.person_id, ctx.actor))
     return next(i for i in _analysis(ctx, c).items if i.id == item_id)
 
@@ -498,6 +529,7 @@ def list_applications(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 @router.put("/{campaign_id}/applications/{application_id}/owner")
 def set_owner(campaign_id: uuid.UUID, application_id: uuid.UUID, body: OwnerIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "set application owners")
     return _review_errors(lambda: review_service.set_app_owner(ctx.session, c, application_id, body.person_id, ctx.actor))
 
 
@@ -509,6 +541,7 @@ def set_owner(campaign_id: uuid.UUID, application_id: uuid.UUID, body: OwnerIn, 
 @router.post("/{campaign_id}/sign-off", response_model=CampaignOut)
 def sign_off(campaign_id: uuid.UUID, body: SignOffIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "sign off the campaign")
     _review_errors(lambda: review_service.sign_off(ctx.session, c, ctx.actor, body.statement))
     return _campaign_out(ctx.session, c, with_snapshots=True, actor=ctx.actor)
 
@@ -517,6 +550,7 @@ def sign_off(campaign_id: uuid.UUID, body: SignOffIn, ctx: Ctx = Depends(get_ctx
 def export_evidence_pack(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     """Build the evidence pack ZIP. Recorded in the ledger, so this is a POST."""
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS | {WorkspaceRole.auditor}, "export evidence")
     if c.state.value in ("draft", "ingesting", "resolving_identities"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Run the analysis before exporting evidence.")
     try:
@@ -558,6 +592,7 @@ def verify_remediations(campaign_id: uuid.UUID, application_id: uuid.UUID = Form
                         file: UploadFile = File(...), ctx: Ctx = Depends(get_ctx)):
     raw = _read_upload(file)
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "verify remediation")
     result = _review_errors(lambda: remediation_service.verify_with_upload(
         ctx.session, c, application_id, raw, file.filename, ctx.actor))
     return {"result": result, "remediations": _remediations(ctx, c)}
@@ -567,6 +602,7 @@ def verify_remediations(campaign_id: uuid.UUID, application_id: uuid.UUID = Form
 def update_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: RemediationUpdateIn,
                        ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "update remediation")
     _review_errors(lambda: remediation_service.update(ctx.session, c, rem_id, ctx.actor, status=body.status,
                                                       ticket_ref=body.ticket_ref, note=body.note))
     return _remediations(ctx, c)
@@ -576,6 +612,7 @@ def update_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: Remediat
 def accept_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: RemediationAcceptIn,
                        ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "accept remediation")
     _review_errors(lambda: remediation_service.accept(ctx.session, c, rem_id, ctx.actor, body.reason))
     return _remediations(ctx, c)
 
@@ -583,6 +620,7 @@ def accept_remediation(campaign_id: uuid.UUID, rem_id: uuid.UUID, body: Remediat
 @router.post("/{campaign_id}/close", response_model=CampaignOut)
 def close_campaign(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "close the campaign")
     _review_errors(lambda: remediation_service.close_campaign(ctx.session, c, ctx.actor))
     return _campaign_out(ctx.session, c, with_snapshots=True, actor=ctx.actor)
 
@@ -590,5 +628,6 @@ def close_campaign(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
 @router.get("/{campaign_id}/remediations/tickets.csv")
 def remediation_tickets(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "download tickets")
     return Response(content=remediation_service.tickets_csv(ctx.session, c), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="remediation-tickets-{c.id}.csv"'})

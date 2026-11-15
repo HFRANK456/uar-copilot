@@ -58,3 +58,18 @@ explaining how to verify it independently.
 Who can decide: the item's assigned reviewer, or the campaign owner (its creator) with an `override_reason`
 that is stored on the decision and shown in the evidence pack. Only the owner can reassign, set app owners,
 sign off, manage remediation and close.
+
+## Workspaces
+
+Everyone gets a personal workspace on first sign-in. Owners invite people by email with a role
+(owner, admin, reviewer, auditor); the invitee signs in with that email and clicks **Join**. One person
+can belong to several workspaces (e.g. an MSP with one per client); the browser sends `X-Workspace-Id`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /workspaces` | Your workspaces and pending invitations |
+| `POST /workspaces` | Create a workspace (you become owner) |
+| `PATCH /workspaces/{id}` | Rename (owner) |
+| `GET/POST /workspaces/{id}/members` | List / invite (owner) |
+| `PATCH/DELETE /workspaces/{id}/members/{member}` | Change role / remove (owner; a workspace keeps at least one owner) |
+| `POST /workspaces/{id}/invitation/accept` or `/decline` | Answer an invitation |

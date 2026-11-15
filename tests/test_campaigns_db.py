@@ -487,6 +487,19 @@ def test_reviewer_selection_rules():
 # ---------------------------------------------------------------------------
 
 
+def _join_as(api, email, role):
+    """The current user (an owner) invites `email` to their workspace; that person then signs in
+    with their own Auth0 account, accepts, and every later request in the test is theirs."""
+    wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"] if w["personal"])
+    r = api.post(f"/workspaces/{wid}/members", json={"email": email, "role": role})
+    assert r.status_code == 201, r.text
+    api.principal.clear()
+    api.principal.update({"sub": f"auth0|{uuid.uuid4()}", "email": email})
+    assert api.post(f"/workspaces/{wid}/invitation/accept").status_code == 200
+    api.headers["X-Workspace-Id"] = wid
+    return wid
+
+
 def _review_campaign(api):
     cid = _resolved_campaign(api)
     api.post(f"/campaigns/{cid}/analyze")
@@ -592,7 +605,7 @@ def test_bulk_keep_refuses_risky_items(api):
 def test_self_review_is_blocked(api):
     cid = _review_campaign(api)
     api.post(f"/campaigns/{cid}/review/start")
-    api.principal["email"] = "priya.shah@acme.io"  # Priya signs in
+    _join_as(api, "priya.shah@acme.io", "reviewer")  # Priya signs in
     items = _items(api, cid)
     own = items[("AWS", "priya.shah", "AdministratorAccess")]
     assert own["is_own_access"] is True
@@ -790,7 +803,7 @@ def test_assigned_reviewer_decides_without_override(api):
     cid = _started(api)
     jordan = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
     assert jordan["reviewer"]["name"] == "Priya Shah"
-    api.principal["email"] = "priya.shah@acme.io"  # the assigned reviewer signs in
+    _join_as(api, "priya.shah@acme.io", "reviewer")  # the assigned reviewer signs in
     mine = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]
     assert mine["is_mine"] and not mine["needs_override"] and mine["can_decide"]
     r = api.post(f"/campaigns/{cid}/review-items/{jordan['id']}/decision", json={"action": "revoke"})
@@ -815,7 +828,7 @@ def test_owner_needs_override_reason_and_others_are_refused(api):
     assert r.json()["as_assigned_reviewer"] is False and r.json()["override_reason"].startswith("Priya on leave")
 
     # Someone who is neither the reviewer nor the owner can't decide or run the campaign.
-    api.principal["email"] = "marcus.lee@acme.io"
+    _join_as(api, "marcus.lee@acme.io", "reviewer")
     other = _items(api, cid)[("AWS", "priya.shah", "AdministratorAccess")]
     assert other["can_decide"] is False
     r = api.post(f"/campaigns/{cid}/review-items/{other['id']}/decision",
@@ -946,6 +959,122 @@ def test_remediation_lifecycle(api):
 def test_remediation_is_owner_only(api):
     cid = _signed_off(api)
     rid = api.get(f"/campaigns/{cid}/remediations").json()["items"][0]["id"]
-    api.principal["email"] = "marcus.lee@acme.io"
+    _join_as(api, "marcus.lee@acme.io", "reviewer")
     assert api.post(f"/campaigns/{cid}/remediations/{rid}", json={"status": "done"}).status_code == 403
     assert api.post(f"/campaigns/{cid}/close").status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Shared workspaces
+# ---------------------------------------------------------------------------
+
+
+def test_first_sign_in_gets_a_personal_workspace(api):
+    body = api.get("/workspaces").json()
+    assert len(body["workspaces"]) == 1 and body["invitations"] == []
+    w = body["workspaces"][0]
+    assert w["personal"] and w["role"] == "owner"
+    assert api.get("/workspaces").json() == body  # idempotent
+
+
+def test_invited_people_share_campaigns_with_their_role(api):
+    cid = _review_campaign(api)
+    owner = dict(api.principal)
+    wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"] if w["personal"])
+    for email, role in (("dana.reyes@acme.io", "reviewer"), ("auditor@cpa.example", "auditor")):
+        assert api.post(f"/workspaces/{wid}/members", json={"email": email, "role": role}).status_code == 201
+    assert api.post(f"/workspaces/{wid}/members", json={"email": "dana.reyes@acme.io", "role": "admin"}).status_code == 422
+
+    # Dana signs in: she sees the invitation, not the campaign, until she accepts.
+    api.principal.clear(); api.principal.update({"sub": "auth0|dana", "email": "dana.reyes@acme.io"})
+    mine = api.get("/workspaces").json()
+    assert [i["id"] for i in mine["invitations"]] == [wid] and len(mine["workspaces"]) == 1
+    api.headers["X-Workspace-Id"] = wid
+    assert api.get("/campaigns").status_code == 403  # not a member yet
+    assert api.post(f"/workspaces/{wid}/invitation/accept").status_code == 200
+    assert [c["id"] for c in api.get("/campaigns").json()] == [cid]
+
+    # As a reviewer she can't run the campaign...
+    assert api.post("/campaigns", json={"name": "nope"}).status_code == 403
+    assert api.post(f"/campaigns/{cid}/analyze").status_code == 403
+    files = {"file": ("hr.csv", (DATA / "sample_hr_roster.csv").read_bytes())}
+    assert api.post(f"/campaigns/{cid}/sources/hr", files=files).status_code == 403
+    assert api.post(f"/campaigns/{cid}/evidence-pack").status_code == 403
+
+    # ...but once the owner starts the review she decides the items assigned to her.
+    api.principal.clear(); api.principal.update(owner)
+    assert api.post(f"/campaigns/{cid}/review/start").status_code == 200
+    api.principal.clear(); api.principal.update({"sub": "auth0|dana", "email": "dana.reyes@acme.io"})
+    priya = _items(api, cid)[("AWS", "priya.shah", "AdministratorAccess")]
+    assert priya["reviewer"]["name"] == "Dana Reyes" and priya["is_mine"] and not priya["needs_override"]
+    r = api.post(f"/campaigns/{cid}/review-items/{priya['id']}/decision",
+                 json={"action": "keep", "justification": "On-call admin, approved by CISO"})
+    assert r.status_code == 200 and r.json()["as_assigned_reviewer"] is True
+    jordan = _items(api, cid)[("AWS", "jordan.kim", "AdministratorAccess")]  # assigned to Priya
+    assert api.post(f"/campaigns/{cid}/review-items/{jordan['id']}/decision",
+                    json={"action": "revoke", "override_reason": "trying to decide for Priya"}).status_code == 403
+
+    # The auditor can read and export, but not decide.
+    api.principal.clear(); api.principal.update({"sub": "auth0|cpa", "email": "auditor@cpa.example"})
+    assert api.post(f"/workspaces/{wid}/invitation/accept").status_code == 200
+    assert api.get(f"/campaigns/{cid}").status_code == 200
+    assert api.post(f"/campaigns/{cid}/evidence-pack").status_code == 200
+    assert api.post(f"/campaigns/{cid}/review-items/{jordan['id']}/decision",
+                    json={"action": "revoke"}).status_code == 403
+    assert api.post(f"/workspaces/{wid}/members", json={"email": "x@y.z", "role": "owner"}).status_code == 403
+
+    # The owner sees everyone.
+    api.principal.clear(); api.principal.update(owner)
+    members = {m["email"] or "owner": m for m in api.get(f"/workspaces/{wid}/members").json()}
+    assert members["dana.reyes@acme.io"]["status"] == "active" and members["auditor@cpa.example"]["role"] == "auditor"
+
+
+def test_non_members_and_bad_ids_are_refused(api):
+    wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"])
+    api.principal.clear(); api.principal.update({"sub": "auth0|stranger", "email": "stranger@evil.example"})
+    for header in (wid, str(uuid.uuid4()), "not-a-uuid"):
+        api.headers["X-Workspace-Id"] = header
+        assert api.get("/campaigns").status_code == 403
+    assert api.get(f"/workspaces/{wid}/members").status_code == 403
+    assert api.post(f"/workspaces/{wid}/invitation/accept").status_code == 404  # no invitation for them
+
+
+def test_invitation_matches_only_the_invited_email(api):
+    wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"])
+    api.post(f"/workspaces/{wid}/members", json={"email": "Sam.Ortiz@acme.io", "role": "admin"})
+    api.principal.clear(); api.principal.update({"sub": "auth0|other", "email": "someone.else@acme.io"})
+    assert api.get("/workspaces").json()["invitations"] == []
+    api.principal.clear(); api.principal.update({"sub": "auth0|sam", "email": "sam.ortiz@acme.io"})
+    assert [i["role"] for i in api.get("/workspaces").json()["invitations"]] == ["admin"]
+    assert api.post(f"/workspaces/{wid}/invitation/decline").status_code == 200
+    assert api.get("/workspaces").json()["invitations"] == []
+
+
+def test_member_management_rules(api):
+    wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"])
+    members = api.get(f"/workspaces/{wid}/members").json()
+    me = next(m for m in members if m["is_you"])
+    # The last owner can't leave or be demoted.
+    assert api.delete(f"/workspaces/{wid}/members/{me['id']}").status_code == 422
+    assert api.patch(f"/workspaces/{wid}/members/{me['id']}", json={"role": "admin"}).status_code == 422
+    inv = api.post(f"/workspaces/{wid}/members", json={"email": "new.owner@acme.io", "role": "owner"}).json()
+    assert api.patch(f"/workspaces/{wid}/members/{inv['id']}", json={"role": "reviewer"}).status_code == 200
+    assert api.delete(f"/workspaces/{wid}/members/{inv['id']}").status_code == 200
+    assert api.patch(f"/workspaces/{wid}", json={"name": "Acme Security"}).status_code == 200
+    assert next(w for w in api.get("/workspaces").json()["workspaces"])["name"] == "Acme Security"
+
+
+def test_several_workspaces_stay_separate(api):
+    """An MSP-style user runs reviews for two clients; data never crosses."""
+    personal = next(w["id"] for w in api.get("/workspaces").json()["workspaces"])
+    client = api.post("/workspaces", json={"name": "Client B"}).json()
+    assert client["role"] == "owner" and not client["personal"]
+    api.headers["X-Workspace-Id"] = client["id"]
+    cid_b = api.post("/campaigns", json={"name": "Client B Q4"}).json()["id"]
+    api.headers["X-Workspace-Id"] = personal
+    assert api.get("/campaigns").json() == [] and api.get(f"/campaigns/{cid_b}").status_code == 404
+    del api.headers["X-Workspace-Id"]  # no header = personal workspace
+    assert api.get("/campaigns").json() == []
+    api.headers["X-Workspace-Id"] = client["id"]
+    assert [c["id"] for c in api.get("/campaigns").json()] == [cid_b]
+    assert {w["name"] for w in api.get("/workspaces").json()["workspaces"]} >= {"Client B"}

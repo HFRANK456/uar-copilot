@@ -26,6 +26,15 @@ async function readError(res: Response): Promise<string> {
   return text || `Request failed (${res.status})`
 }
 
+// The workspace every request is for. Set by WorkspaceProvider; sent as X-Workspace-Id.
+let activeWorkspace: string | null = null
+export function setActiveWorkspace(id: string | null) {
+  activeWorkspace = id
+}
+function workspaceHeader(headers: Headers) {
+  if (activeWorkspace) headers.set('X-Workspace-Id', activeWorkspace)
+}
+
 // Auth0 errors that mean "this session can't be renewed in the background; sign in again".
 const SIGN_IN_AGAIN = new Set(['login_required', 'consent_required', 'interaction_required', 'missing_refresh_token', 'invalid_grant'])
 
@@ -54,6 +63,7 @@ export function useApi() {
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       const headers = new Headers(init.headers)
       if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
+      workspaceHeader(headers)
       if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
         headers.set('Content-Type', 'application/json')
       }
@@ -73,6 +83,7 @@ export function useDownload() {
     async (path: string, fallbackName: string, method: 'GET' | 'POST' = 'POST'): Promise<string> => {
       const headers = new Headers()
       if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
+      workspaceHeader(headers)
       const res = await fetch(`${API_BASE_URL}${path}`, { method, headers })
       if (!res.ok) throw new ApiError(res.status, await readError(res))
       const match = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')
@@ -300,4 +311,24 @@ export type VerifyResult = {
     results: { remediation_id: string; account: string; entitlement: string; verified: boolean; detail: string }[]
   }
   remediations: RemediationList
+}
+
+export type WorkspaceRole = 'owner' | 'admin' | 'reviewer' | 'auditor'
+
+export type Workspace = {
+  id: string
+  name: string
+  role: WorkspaceRole
+  personal: boolean
+  invited_by: string | null
+}
+
+export type Member = {
+  id: string
+  email: string | null
+  role: WorkspaceRole
+  status: 'invited' | 'active'
+  invited_by: string | null
+  accepted_at: string | null
+  is_you: boolean
 }

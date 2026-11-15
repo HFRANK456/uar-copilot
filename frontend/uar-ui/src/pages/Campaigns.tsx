@@ -2,11 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useApi, type Campaign } from '../api'
 import { StateBadge } from './shared'
+import { canManage, useWorkspace } from '../workspace'
 
 export default function CampaignsPage() {
   const api = useApi()
   const navigate = useNavigate()
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null)
+  const { current } = useWorkspace()
+  const manage = canManage(current)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ name: '', period_start: '', period_end: '', due_date: '' })
@@ -51,41 +54,53 @@ export default function CampaignsPage() {
       </header>
 
       <section className="grid">
+        {manage ? (
         <form className="panel" onSubmit={create}>
-          <div className="panel-header">
-            <h2>New campaign</h2>
-          </div>
-          <label className="field">
-            <span>Name</span>
-            <input
-              required
-              maxLength={255}
-              placeholder="Q4 2026 access review"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
-          </label>
-          <div className="field-row">
+            <div className="panel-header">
+              <h2>New campaign</h2>
+            </div>
             <label className="field">
-              <span>Period start</span>
-              <input type="date" value={form.period_start} onChange={(e) => setForm({ ...form, period_start: e.target.value })} />
+              <span>Name</span>
+              <input
+                required
+                maxLength={255}
+                placeholder="Q4 2026 access review"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
             </label>
+            <div className="field-row">
+              <label className="field">
+                <span>Period start</span>
+                <input type="date" value={form.period_start} onChange={(e) => setForm({ ...form, period_start: e.target.value })} />
+              </label>
+              <label className="field">
+                <span>Period end</span>
+                <input type="date" value={form.period_end} onChange={(e) => setForm({ ...form, period_end: e.target.value })} />
+              </label>
+            </div>
             <label className="field">
-              <span>Period end</span>
-              <input type="date" value={form.period_end} onChange={(e) => setForm({ ...form, period_end: e.target.value })} />
+              <span>Due date</span>
+              <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
             </label>
-          </div>
-          <label className="field">
-            <span>Due date</span>
-            <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
-          </label>
-          {error && <div className="error">{error}</div>}
-          <div className="actions">
-            <button type="submit" className="primary" disabled={creating || form.name.trim() === ''}>
-              {creating ? 'Creating…' : 'Create campaign'}
-            </button>
-          </div>
-        </form>
+            {error && <div className="error">{error}</div>}
+            <div className="actions">
+              <button type="submit" className="primary" disabled={creating || form.name.trim() === ''}>
+                {creating ? 'Creating…' : 'Create campaign'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <section className="panel">
+            <div className="panel-header"><h2>Your role</h2></div>
+            <p className="panel-text">
+              You're a <strong>{current?.role}</strong> in {current?.name}.{' '}
+              {current?.role === 'reviewer'
+                ? 'Open a campaign and tick "Assigned to me" to see the items you need to decide.'
+                : 'You can open campaigns and download their evidence packs.'}
+            </p>
+          </section>
+        )}
 
         <section className="panel">
           <div className="panel-header">

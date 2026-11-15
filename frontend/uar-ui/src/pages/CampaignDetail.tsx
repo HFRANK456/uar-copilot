@@ -19,6 +19,7 @@ import {
   type Snapshot,
 } from '../api'
 import { Confidence, StateBadge, StatusPill } from './shared'
+import { canManage, useWorkspace } from '../workspace'
 
 const INGEST_STATES = new Set(['draft', 'ingesting', 'resolving_identities', 'analyzing'])
 const RESOLVE_STATES = new Set(['ingesting', 'resolving_identities'])
@@ -44,6 +45,7 @@ export default function CampaignDetailPage() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
+  const manage = canManage(useWorkspace().current)
 
   const refresh = useCallback(async () => {
     try {
@@ -124,7 +126,7 @@ export default function CampaignDetailPage() {
         campaign={campaign}
         identities={identities}
         people={people}
-        canResolve={hasHr && hasAccess && RESOLVE_STATES.has(campaign.state)}
+        canResolve={manage && hasHr && hasAccess && RESOLVE_STATES.has(campaign.state)}
         onChange={refresh}
       />
 
@@ -191,7 +193,8 @@ function Steps({
 
 function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: () => Promise<void> }) {
   const api = useApi()
-  const canIngest = INGEST_STATES.has(campaign.state)
+  const manage = canManage(useWorkspace().current)
+  const canIngest = manage && INGEST_STATES.has(campaign.state)
   const [hrFile, setHrFile] = useState<File | null>(null)
   const [accessFile, setAccessFile] = useState<File | null>(null)
   const [appName, setAppName] = useState('')
@@ -235,7 +238,11 @@ function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: 
         <h2>Sources</h2>
         <span className="badge">CSV / XLSX</span>
       </div>
-      {!canIngest && <p className="panel-text">This campaign is past the upload stage.</p>}
+      {!canIngest && (
+        <p className="panel-text">
+          {manage ? 'This campaign is past the upload stage.' : 'Only workspace owners and admins can upload files.'}
+        </p>
+      )}
       {canIngest && (
         <div className="upload-grid">
           <div className="upload-box">
@@ -368,7 +375,7 @@ function IdentitySection({
 
   const summary = identities?.summary
   const resolvedOnce = (summary?.accounts ?? 0) > 0 && (summary?.not_resolved ?? 0) === 0
-  const editable = campaign.state === 'resolving_identities'
+  const editable = canManage(useWorkspace().current) && campaign.state === 'resolving_identities'
   const active = FILTERS.find((f) => f.key === filter) ?? FILTERS[0]
   const items = useMemo(() => (identities?.items ?? []).filter((i) => active.match(i.status)), [identities, active])
 
@@ -644,7 +651,8 @@ function AnalysisSection({
   const [overrideReason, setOverrideReason] = useState('')
   const overrideOk = overrideReason.trim().length >= 10
   const ready = Boolean(identities?.summary.ready_for_analysis)
-  const canRun = ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
+  const manage = canManage(useWorkspace().current)
+  const canRun = manage && ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
   const summary = analysis?.summary ?? null
   const progress = analysis?.progress ?? null
   const items = useMemo(() => {
@@ -690,14 +698,14 @@ function AnalysisSection({
             onClick={() => call('analyze', `/campaigns/${campaign.id}/analyze`, { method: 'POST' })}>
             {busy === 'analyze' ? 'Analyzing…' : summary ? 'Re-run analysis' : 'Run analysis'}
           </button>
-          {summary && campaign.state === 'analyzing' && (
+          {manage && summary && campaign.state === 'analyzing' && (
             <button type="button" className="primary" disabled={busy !== null}
               onClick={() => call('start', `/campaigns/${campaign.id}/review/start`, { method: 'POST' })}>
               {busy === 'start' ? 'Starting…' : 'Start review'}
             </button>
           )}
           {!ready && <span className="hint">Resolve every identity first.</span>}
-          {summary && campaign.state === 'analyzing' && (
+          {manage && summary && campaign.state === 'analyzing' && (
             <span className="hint">Starting the review freezes the analysis.</span>
           )}
         </div>
@@ -1326,12 +1334,13 @@ function EvidenceSection({
   onChange: () => Promise<void>
 }) {
   const download = useDownload()
+  const role = useWorkspace().current?.role
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   if (!evidence) return null
   const v = evidence.verification
-  const canExport = EXPORTABLE.has(campaign.state)
+  const canExport = (role !== 'reviewer') && EXPORTABLE.has(campaign.state)
   const draft = !campaign.signed_off_at
 
   async function exportPack() {

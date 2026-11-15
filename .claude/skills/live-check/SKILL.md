@@ -27,7 +27,8 @@ to confirm a change works on the real site with real sign-in, and to report exac
   `Live check <YYYY-MM-DD HH:MM>`, so existing campaigns are left alone.
 
 ## Standard flow and what each step should show
-1. Open https://uar-copilot.vercel.app. It should land on **Campaigns** (the URL ends in `/campaigns`).
+1. Open https://uar-copilot.vercel.app. It should land on **Campaigns** (the URL ends in `/campaigns`),
+   with the current workspace name shown top right.
    If a red "Sign-in failed" banner shows, copy its full text into the report and stop.
 2. Sign in if needed (the user does this). The user's email should appear top right.
 3. Create the campaign. It opens on its own page in state **Draft**.
@@ -60,6 +61,8 @@ to confirm a change works on the real site with real sign-in, and to report exac
 10. **Download evidence pack** → a file `evidence-Live_check_….zip` downloads. **Show events**:
    the newest event is `evidence.exported`, and the header says "Hash chain verified".
 11. Open **Quick scan** in the nav: the page must say "Nothing is saved".
+12. Click **Workspace** (top right): the page lists the user as **owner**, with an invite form and a
+    **New workspace** form. Don't invite anyone or create workspaces unless the user asks.
 
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any

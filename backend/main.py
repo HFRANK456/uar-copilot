@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.api.campaigns import router as campaigns_router  # noqa: E402
+from backend.api.workspaces import router as workspaces_router  # noqa: E402
 from backend.auth import auth_disabled, require_auth  # noqa: E402
 from backend.rule_registry import RULE_SET_VERSION  # noqa: E402
 from backend.rules import aggregate_results, compute_flags, evaluate_rules, merge_data  # noqa: E402
@@ -51,12 +52,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=False,  # bearer tokens, not cookies
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     expose_headers=["Content-Disposition", "X-Manifest-SHA256"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Workspace-Id"],
 )
 
 app.include_router(campaigns_router)
+app.include_router(workspaces_router)
 
 
 def _run_migrations() -> None:

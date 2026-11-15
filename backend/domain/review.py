@@ -54,13 +54,15 @@ class NotAuthorized(PermissionError):
 
 
 def is_owner(campaign: Campaign, actor: str) -> bool:
-    """The campaign owner is whoever created it; they run the campaign and can act for reviewers."""
-    return bool(actor) and campaign.created_by == actor
+    """Who runs the campaign and may act for reviewers: its creator, or a workspace owner/admin."""
+    from backend.domain.workspaces import MANAGERS, current_role
+
+    return (bool(actor) and campaign.created_by == actor) or current_role.get() in MANAGERS
 
 
 def require_owner(campaign: Campaign, actor: str, what: str) -> None:
     if not is_owner(campaign, actor):
-        raise NotAuthorized(f"only the campaign owner ({campaign.created_by}) can {what}")
+        raise NotAuthorized(f"only the campaign owner ({campaign.created_by}) or a workspace admin can {what}")
 
 
 def authority(session: Session, campaign: Campaign, item: ReviewItem, actor: str,

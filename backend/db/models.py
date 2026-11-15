@@ -111,6 +111,41 @@ class Tenant(Base):
     )
     plan: Mapped[str] = mapped_column(String(50), default="design_partner")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[Optional[str]] = mapped_column(String(255))
+
+
+class WorkspaceRole(str, enum.Enum):
+    owner = "owner"        # everything, including members
+    admin = "admin"        # runs campaigns
+    reviewer = "reviewer"  # decides items assigned to them
+    auditor = "auditor"    # read-only, can export evidence
+
+
+class WorkspaceMember(Base):
+    """Who may use a workspace (tenant) and as what.
+
+    Not under row-level security: it is how a request finds its tenant in the
+    first place. Code only reads it by the signed-in user's own sub/email, or
+    within a workspace that user already belongs to.
+    """
+
+    __tablename__ = "workspace_member"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_member_tenant_email"),
+        UniqueConstraint("tenant_id", "user_sub", name="uq_member_tenant_sub"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), index=True
+    )
+    user_sub: Mapped[Optional[str]] = mapped_column(String(255), index=True)  # set once they sign in
+    email: Mapped[Optional[str]] = mapped_column(String(320), index=True)     # lower-case
+    role: Mapped[WorkspaceRole] = mapped_column(_enum(WorkspaceRole, "workspace_role"))
+    status: Mapped[str] = mapped_column(String(20), default="active")       # invited | active
+    invited_by: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # ---------------------------------------------------------------------------
