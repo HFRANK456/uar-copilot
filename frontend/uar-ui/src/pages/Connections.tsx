@@ -8,7 +8,10 @@ function errorText(err: unknown) {
   return err instanceof Error ? err.message : 'Something went wrong'
 }
 
+const ENTRA_PERMISSIONS = ['User.Read.All', 'RoleManagement.Read.Directory', 'AuditLog.Read.All']
+
 function describe(c: Connection) {
+  if (c.kind === 'entra_id') return `tenant ${c.config.tenant_id} · app ${c.config.client_id}`
   if (c.kind === 'google_workspace') return `${c.config.domain} · acting as ${c.config.admin_email}`
   const tickets = c.config.project_key ? `tickets go to project ${c.config.project_key}` : 'no ticket project set'
   return `${c.config.site?.replace('https://', '')} · ${c.config.email} · ${tickets}`
@@ -38,6 +41,10 @@ export function ConnectionsPanel() {
   const [jiraEmail, setJiraEmail] = useState('')
   const [token, setToken] = useState('')
   const [projectKey, setProjectKey] = useState('')
+  // Microsoft Entra ID
+  const [tenantId, setTenantId] = useState('')
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
 
   async function run(label: string, fn: () => Promise<string | void>) {
     setBusy(label)
@@ -78,6 +85,9 @@ export function ConnectionsPanel() {
     setJiraEmail('')
     setToken('')
     setProjectKey('')
+    setTenantId('')
+    setClientId('')
+    setClientSecret('')
     setFormKey((k) => k + 1)
   }
 
@@ -85,7 +95,9 @@ export function ConnectionsPanel() {
     const body =
       kind === 'google_workspace'
         ? { kind, config: { admin_email: adminEmail }, secret: { service_account: keyFile?.json } }
-        : { kind, config: { site, email: jiraEmail, project_key: projectKey }, secret: { api_token: token } }
+        : kind === 'entra_id'
+          ? { kind, config: { tenant_id: tenantId, client_id: clientId }, secret: { client_secret: clientSecret } }
+          : { kind, config: { site, email: jiraEmail, project_key: projectKey }, secret: { api_token: token } }
     await run('add', async () => {
       const created = await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(body) })
       resetForm()
@@ -103,7 +115,9 @@ export function ConnectionsPanel() {
       ? adminEmail.includes('@') && keyFile !== null
       : kind === 'jira_cloud'
         ? site.trim() !== '' && jiraEmail.includes('@') && token.trim() !== ''
-        : false
+        : kind === 'entra_id'
+          ? tenantId.trim() !== '' && clientId.trim() !== '' && clientSecret.trim() !== ''
+          : false
 
   return (
     <section className="panel">
@@ -162,6 +176,7 @@ export function ConnectionsPanel() {
           <select className="text-input" value={kind} onChange={(e) => setKind(e.target.value as ConnectionKind | '')}>
             <option value="">Choose a system…</option>
             <option value="google_workspace">Google Workspace (users, suspended accounts, admin roles)</option>
+            <option value="entra_id">Microsoft Entra ID / Microsoft 365 (users, disabled and guest accounts, admin roles)</option>
             <option value="jira_cloud">Jira Cloud (users and groups; remediation tickets)</option>
           </select>
         </label>
@@ -193,6 +208,45 @@ export function ConnectionsPanel() {
               <input type="file" accept=".json,application/json" onChange={(e) => void readKey(e.target.files?.[0])} />
             </label>
             {keyFile && <p className="hint">Key for {String(keyFile.json.client_email)} ready.</p>}
+          </>
+        )}
+
+        {kind === 'entra_id' && (
+          <>
+            <details className="setup-steps">
+              <summary>How to set this up (about 5 minutes, needs a Microsoft 365 / Entra admin)</summary>
+              <ol>
+                <li>Go to <strong>entra.microsoft.com</strong> → Applications → <strong>App registrations</strong> →
+                  {' '}<strong>New registration</strong>. Name it "UAR Copilot", keep "Single tenant", click Register.</li>
+                <li>On the app's <strong>Overview</strong>, copy the <strong>Application (client) ID</strong> and the
+                  {' '}<strong>Directory (tenant) ID</strong>.</li>
+                <li><strong>API permissions</strong> → Add a permission → Microsoft Graph → <strong>Application
+                  permissions</strong>, tick:
+                  <code className="scopes">{ENTRA_PERMISSIONS.join(', ')}</code>
+                  then click <strong>Grant admin consent</strong>.</li>
+                <li><strong>Certificates &amp; secrets</strong> → New client secret → copy its <strong>Value</strong>
+                  {' '}(shown only once). Note when it expires.</li>
+              </ol>
+              <p className="hint">
+                All three permissions are read-only. Last sign-in dates need Entra ID P1 or P2 (included in Microsoft
+                365 Business Premium and E3/E5); without it the connection still works, just without them.
+              </p>
+            </details>
+            <label className="field">
+              <span>Directory (tenant) ID</span>
+              <input value={tenantId} onChange={(e) => setTenantId(e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autoComplete="off" />
+            </label>
+            <label className="field">
+              <span>Application (client) ID</span>
+              <input value={clientId} onChange={(e) => setClientId(e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autoComplete="off" />
+            </label>
+            <label className="field">
+              <span>Client secret value</span>
+              <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)}
+                autoComplete="new-password" />
+            </label>
           </>
         )}
 

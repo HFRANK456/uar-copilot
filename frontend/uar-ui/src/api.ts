@@ -342,7 +342,7 @@ export type Member = {
   is_you: boolean
 }
 
-export type ConnectionKind = 'google_workspace' | 'jira_cloud'
+export type ConnectionKind = 'google_workspace' | 'jira_cloud' | 'entra_id'
 
 export type Connection = {
   id: string
@@ -357,6 +357,8 @@ export type Connection = {
     email?: string
     project_key?: string | null
     issue_type?: string
+    tenant_id?: string
+    client_id?: string
   }
   status: 'untested' | 'ok' | 'error'
   last_checked_at: string | null
@@ -376,6 +378,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   upload: 'Uploaded file',
   google_workspace: 'Google Workspace',
   jira_cloud: 'Jira Cloud',
+  entra_id: 'Microsoft Entra ID',
 }
 
 /** The workspace's connections, for owners and admins (everyone else gets an empty list). */

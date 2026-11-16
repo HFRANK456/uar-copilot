@@ -25,6 +25,8 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
             "privileged role administrator",
             "security administrator",
             "conditional access administrator",
+            "privileged authentication administrator",  # Entra ID
+            "hybrid identity administrator",  # Entra ID
             "super admin",  # Google Workspace
             "site-admins",  # Atlassian
             "org-admins",  # Atlassian
@@ -47,7 +49,10 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
             "user administrator",
             "exchange administrator",
             "sharepoint administrator",
-            "application administrator",
+            "application administrator",  # also matches Entra "Cloud Application Administrator"
+            "authentication administrator",  # Entra ID
+            "intune administrator",  # Entra ID
+            "groups administrator",  # Entra ID
             "groups admin",  # Google Workspace
             "user management admin",  # Google Workspace
             "jira-administrators",
@@ -67,6 +72,8 @@ PRIVILEGED_ACCESS_CATALOG: dict[str, dict[str, Iterable[str]]] = {
             "help desk admin",  # Google Workspace
             "billing administrator",
             "compliance administrator",
+            "teams administrator",  # Entra ID
+            "global reader",  # Entra ID: reads everything, including security settings
             "report reader",
         },
     },

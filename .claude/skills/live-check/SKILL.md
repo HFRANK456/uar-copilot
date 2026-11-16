@@ -108,6 +108,25 @@ The user does every step that involves their identity or a secret; you do the cl
    Jira project and confirm the tickets are there with the label `access-review`.
 If anything fails, report the exact message the Connections list shows under **Not working**.
 
+## Setting up Microsoft Entra ID (only when the user asks, e.g. `/live-check set up Entra`)
+The user needs admin rights in a Microsoft 365 / Entra tenant (their own, or a free one from an
+Azure account). They do every sign-in and handle the secret; you do the clicking around it.
+1. Open https://entra.microsoft.com and **hand over** for sign-in. Then: Applications → App
+   registrations → New registration → name "UAR Copilot", Single tenant → Register.
+2. From the app's Overview, note the **Application (client) ID** and **Directory (tenant) ID**
+   (these are not secret).
+3. API permissions → Add a permission → Microsoft Graph → Application permissions → tick
+   `User.Read.All`, `RoleManagement.Read.Directory`, `AuditLog.Read.All` → Add → **Grant admin
+   consent** (the user confirms the consent prompt).
+4. Certificates & secrets → New client secret → Add. Ask the user to **copy the Value
+   themselves**. Never read the secret from the screen, copy it, or type it.
+5. In https://uar-copilot.vercel.app/workspace → Connections → Add a connection → Microsoft Entra
+   ID: fill in the tenant ID and client ID, ask the user to paste the secret, **Connect and test**
+   → "Microsoft Entra ID connected. Signed in to tenant …" and **Working**.
+6. New campaign `Entra check <YYYY-MM-DD HH:MM>`, upload `sample_hr_roster.csv`, **Pull from a
+   connection** → Microsoft Entra ID → report the counts and warnings exactly (a tenant without
+   Entra ID P1/P2 shows "Last sign-in dates aren't available"; that's expected).
+
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any
 error, a screenshot of anything that failed, and the campaign name you used. If something failed,

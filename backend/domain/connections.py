@@ -21,7 +21,7 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.connectors import google_workspace, jira_cloud, secrets
+from backend.connectors import entra_id, google_workspace, jira_cloud, secrets
 from backend.connectors.base import ConnectorError
 from backend.db.models import Application, Campaign, Connection, SourceKind, SourceSnapshot
 from backend.domain import remediation as remediation_service
@@ -29,8 +29,9 @@ from backend.domain.evidence import record_event
 from backend.domain.ingest import IngestResult, load_access_frame
 from schemas.user_schema import ColumnMapping
 
-KINDS: Dict[str, ModuleType] = {"google_workspace": google_workspace, "jira_cloud": jira_cloud}
-LABELS = {"google_workspace": "Google Workspace", "jira_cloud": "Jira Cloud"}
+KINDS: Dict[str, ModuleType] = {"google_workspace": google_workspace, "jira_cloud": jira_cloud,
+                                "entra_id": entra_id}
+LABELS = {"google_workspace": "Google Workspace", "jira_cloud": "Jira Cloud", "entra_id": "Microsoft Entra ID"}
 CANONICAL = ["native_id", "username", "email", "display_name", "status", "role", "last_login"]
 
 

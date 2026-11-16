@@ -36,13 +36,15 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 8 | #12 | Connectors: `connection` table (migration 0006, RLS), credentials Fernet-encrypted with env `CONNECTOR_SECRET_KEY`, Google Workspace (service account + domain-wide delegation, read-only: users, suspended, last login, admin roles) and Jira Cloud (email + API token: users/app accounts with groups; creates remediation tickets). Workspace → Connections (owner/admin; add, test, remove); campaign Sources "Pull from a connection" (raw API JSON is the snapshot, `source.pulled` event); Remediation "Send to Jira". Catalog knows Google/Jira admin roles (rule set 2026.11.3). **Jira verified live 2026-11-15** on the user's free test site `uarcopilot-test.atlassian.net` (project key `KAN`): pull of 44 accounts / 30 group grants (most are Atlassian built-in bot accounts), and Send to Jira created KAN-4. Google not yet tested live |
 | 9 | #13, #14 | Review list: people first, Accounts filter (people / service and bot accounts) with a hidden-items count; remediation verify by re-pulling from the connection that supplied the application (`POST …/remediations/verify-pull`, method `repull`); remediation shows usernames instead of opaque IDs (Jira); verify result stays visible after the last change is confirmed (#14); `/live-check set up Jira` (#13) |
 | 10 | #15 | Claude suggestions for reviewers (PRD C): `POST /campaigns/{id}/recommendations` (managers; analyzing or in_review) sends de-identified flagged items (no names/emails/usernames/IDs) to `claude-opus-5-5` with `fallbacks: "default"` and a JSON schema; each suggestion must cite its own item's findings or is dropped; stored on `review_item.recommendation/rationale/recommendation_meta` (migration 0007); `recommendation.generated` ledger event with payload SHA-256; pack `review_items.csv` gains `ai_*` columns incl. `ai_suggestion_followed`. Needs `ANTHROPIC_API_KEY` on Render. Not yet run against the real API (no key in the sandbox) |
+| 11 | #16 | Microsoft Entra ID connector (`connectors/entra_id.py`, kind `entra_id`): app registration with client credentials (tenant ID, client ID, secret), Graph application permissions User.Read.All, RoleManagement.Read.Directory, AuditLog.Read.All; users (disabled, guests, `signInActivity` with fallback when the tenant lacks P1/P2) and `directoryRoles?$expand=members` as entitlements; catalog adds Entra roles (rule set 2026.11.4); Connections form with setup steps; `/live-check set up Entra`. Tested with recorded-format Graph responses only; not yet against a real tenant |
 
 **Phase 1 remaining, in the recommended order:**
 - B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
 - Invitation emails (today the owner tells people to sign in; needs an email provider, same as reminders).
 - **Connectors, next ones** (decided 2026-11-15): Google Workspace and Jira Cloud are built (#12).
-  Recommended order after them: an HR source through a unified HRIS API (Merge or Finch) or
-  BambooHR directly, then Okta / Microsoft Entra ID, GitHub, AWS IAM Identity Center. Workday
+  Entra ID is built (#16). Next: HR rosters through Finch (decided 2026-11-16: MSP clients are mostly
+  on payroll providers like Gusto, ADP, Paychex, Justworks, Rippling; Finch covers them with one
+  integration), then Okta, GitHub, AWS IAM Identity Center. Workday
   directly only when a larger customer needs it. Also: expand Google admin roles assigned to groups
   (today they produce a warning).
 - D. Reminders and escalation (email) to reviewers.
@@ -57,7 +59,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `app.tenant_id` with SET LOCAL), `domain/` (`campaigns`, `evidence`, `ingest`, `identity`,
   `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack),
   `workspaces`, `connections`, `recommendations`), `llm.py` (Claude client), `connectors/` (`base` httpx client + errors, `secrets` Fernet,
-  `google_workspace`, `jira_cloud`), `api/campaigns.py` (all `/campaigns` routes),
+  `google_workspace`, `jira_cloud`, `entra_id`), `api/campaigns.py` (all `/campaigns` routes),
   `api/workspaces.py` (`/workspaces`), `api/connections.py` (`/connections`).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
 - **Migrations**: `backend/migrations/versions/0001..0007`. A new tenant table must enable and force
@@ -74,7 +76,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   put in a contextvar by `ctx.activate()` inside `_load` (FastAPI runs the dependency and endpoint in
   different threads). `org_id` claims still map to an `org:<id>` workspace (role admin).
   Local dev: `AUTH_DISABLED=1` plus `LOCAL_DEV_SUB` / `LOCAL_DEV_EMAIL` to act as different users.
-- **Rules (2026.11.3)**: terminated_privileged_active (critical), terminated_active past grace
+- **Rules (2026.11.4)**: terminated_privileged_active (critical), terminated_active past grace
   (high), privileged_access_critical (high), terminated_active_within_grace (medium),
   privileged_access_high (medium), external_account_active (medium), privileged_access_medium (low),
   dormant_account >90 days (low), admin_role uncatalogued (low).

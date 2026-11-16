@@ -18,7 +18,7 @@ it is not by itself a violation. `critical` is reserved for terminated users who
 still hold active privileged access.
 """
 
-RULE_SET_VERSION = "2026.11.3"
+RULE_SET_VERSION = "2026.11.4"
 
 # Accounts with no login in this many days count as dormant.
 DORMANT_DAYS = 90
