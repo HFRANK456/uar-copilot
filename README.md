@@ -19,6 +19,9 @@ AUTH_DISABLED=true uvicorn backend.main:app --reload   # local dev only
 | `TERMINATION_GRACE_BUSINESS_DAYS` | No | Default `1`. Terminated-but-active within this window is `medium`, after it `high` |
 | `LOG_LEVEL` | No | Default `INFO`. Logs are JSON and never contain row contents |
 | `ANTHROPIC_API_KEY` | For Claude suggestions | Claude API key used to draft reviewer suggestions. Without it, **Draft suggestions with Claude** returns 503 and everything else works |
+| `RESEND_API_KEY` | For email | Resend API key for invitation, review-start and reminder emails. Without it nothing is emailed and the app says so |
+| `EMAIL_FROM` | No | Sender, e.g. `UAR Copilot <reviews@yourdomain.com>` (a domain verified in Resend). Default `onboarding@resend.dev`, which Resend only delivers to the Resend account's own address |
+| `APP_URL` | No | Base URL for links in emails. Default `https://uar-copilot.vercel.app` |
 | `CONNECTOR_SECRET_KEY` | For connections | Fernet key that encrypts connection credentials at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, adding a connection returns 503. Changing it makes saved connections unreadable (re-add them) |
 
 ## Frontend (`frontend/uar-ui`)
@@ -128,3 +131,17 @@ engine still decides what is risky; Claude only explains, and a person makes eve
   `ai_suggestion_followed`.
 - Code: `backend/llm.py` (client; tests swap `client_factory` for a fake), `backend/domain/recommendations.py`,
   `POST /campaigns/{id}/recommendations`.
+
+## Email: invitations, review start, reminders
+
+Sent through Resend (`backend/mailer.py`), best-effort: a failed or unconfigured send never blocks
+anything, and the result is shown and recorded.
+
+- **Workspace invitation**: emailed when an owner invites someone. Inviting someone who is still only
+  invited updates their role and resends.
+- **Start review**: each assigned reviewer (from the HR roster) gets the number of items and a link,
+  and is added to the workspace as an invited Reviewer if needed. Event `review.reviewers_notified`.
+- **Reminders** (`POST /campaigns/{id}/reminders`, campaign owner or workspace admin, in review): every
+  reviewer with undecided items. After the due date the reviewer's manager from the HR roster is
+  copied (escalation). Event `review.reminders_sent`.
+- Emails contain counts and a link only, never account names, entitlements or findings.

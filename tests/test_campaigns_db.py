@@ -983,12 +983,16 @@ def test_invited_people_share_campaigns_with_their_role(api):
     wid = next(w["id"] for w in api.get("/workspaces").json()["workspaces"] if w["personal"])
     for email, role in (("dana.reyes@acme.io", "reviewer"), ("auditor@cpa.example", "auditor")):
         assert api.post(f"/workspaces/{wid}/members", json={"email": email, "role": role}).status_code == 201
-    assert api.post(f"/workspaces/{wid}/members", json={"email": "dana.reyes@acme.io", "role": "admin"}).status_code == 422
+    # Inviting someone who is still only invited updates their role (and resends the email).
+    again = api.post(f"/workspaces/{wid}/members", json={"email": "dana.reyes@acme.io", "role": "admin"})
+    assert again.status_code == 201 and again.json()["role"] == "admin"
+    api.post(f"/workspaces/{wid}/members", json={"email": "dana.reyes@acme.io", "role": "reviewer"})
 
     # Dana signs in: she sees the invitation, not the campaign, until she accepts.
     api.principal.clear(); api.principal.update({"sub": "auth0|dana", "email": "dana.reyes@acme.io"})
     mine = api.get("/workspaces").json()
-    assert [i["id"] for i in mine["invitations"]] == [wid] and len(mine["workspaces"]) == 1
+    # Other tests' campaigns may also have invited the sample people, so look for this workspace.
+    assert wid in [i["id"] for i in mine["invitations"]] and len(mine["workspaces"]) == 1
     api.headers["X-Workspace-Id"] = wid
     assert api.get("/campaigns").status_code == 403  # not a member yet
     assert api.post(f"/workspaces/{wid}/invitation/accept").status_code == 200
@@ -1045,9 +1049,10 @@ def test_invitation_matches_only_the_invited_email(api):
     api.principal.clear(); api.principal.update({"sub": "auth0|other", "email": "someone.else@acme.io"})
     assert api.get("/workspaces").json()["invitations"] == []
     api.principal.clear(); api.principal.update({"sub": "auth0|sam", "email": "sam.ortiz@acme.io"})
-    assert [i["role"] for i in api.get("/workspaces").json()["invitations"]] == ["admin"]
+    mine = lambda: [i["role"] for i in api.get("/workspaces").json()["invitations"] if i["id"] == wid]  # noqa: E731
+    assert mine() == ["admin"]  # other tests' workspaces may have invited the same sample people
     assert api.post(f"/workspaces/{wid}/invitation/decline").status_code == 200
-    assert api.get("/workspaces").json()["invitations"] == []
+    assert mine() == []
 
 
 def test_member_management_rules(api):

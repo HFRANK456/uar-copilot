@@ -1643,3 +1643,11 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
   text-transform: uppercase;
   color: var(--muted);
 }
+
+.reminder-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-top: 10px;
+}

@@ -136,7 +136,8 @@ export default function CampaignDetailPage() {
         onChange={refresh}
       />
 
-      <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} people={people} onChange={refresh} />
+      <AnalysisSection campaign={campaign} identities={identities} analysis={analysis} people={people} onChange={refresh}
+        lastReminder={evidence?.events.filter((e) => e.type === 'review.reminders_sent').at(-1)?.occurred_at ?? null} />
 
       {['remediating', 'verifying', 'closed'].includes(campaign.state) && (
         <RemediationSection campaign={campaign} onChange={refresh} />
@@ -687,12 +688,14 @@ function AnalysisSection({
   analysis,
   people,
   onChange,
+  lastReminder,
 }: {
   campaign: Campaign
   identities: IdentityList | null
   analysis: Analysis | null
   people: PersonRef[]
   onChange: () => Promise<void>
+  lastReminder: string | null
 }) {
   const api = useApi()
   const [busy, setBusy] = useState<string | null>(null)
@@ -733,6 +736,49 @@ function AnalysisSection({
   const suggested = (analysis?.items ?? []).filter((i) => i.recommendation).length
   const canSuggest = manage && flagged > 0 && (campaign.state === 'analyzing' || inReview)
   const [aiNote, setAiNote] = useState<string | null>(null)
+  const [mailNote, setMailNote] = useState<string | null>(null)
+
+  async function startReview() {
+    setBusy('start')
+    setError(null)
+    try {
+      const r = await api<Analysis>(`/campaigns/${campaign.id}/review/start`, { method: 'POST' })
+      const n = r.notifications
+      if (n) {
+        const failed = n.failed?.length ?? 0
+        setMailNote(!n.email_configured
+          ? "Review started. Email isn't set up yet, so tell reviewers to sign in and open this campaign."
+          : `Review started. Emailed ${n.emailed} reviewer(s) their items` +
+            (n.invited_to_workspace?.length ? `; ${n.invited_to_workspace.length} were added to the workspace as Reviewers` : '') +
+            (failed ? `. ${failed} couldn't be emailed (see the evidence trail).` : '.'))
+      }
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function sendReminders() {
+    setBusy('remind')
+    setError(null)
+    setMailNote(null)
+    try {
+      const r = await api<{ result: { reminded: number; escalated: number; overdue: boolean; failed: unknown[] } }>(
+        `/campaigns/${campaign.id}/reminders`, { method: 'POST' })
+      const x = r.result
+      setMailNote(x.reminded === 0 && x.failed.length === 0
+        ? 'Nobody to remind: every assigned item has a decision.'
+        : `Reminded ${x.reminded} reviewer(s)` + (x.escalated ? `, copying ${x.escalated} manager(s) because the review is overdue` : '') +
+          (x.failed.length ? `. ${x.failed.length} couldn't be emailed (see the evidence trail).` : '.'))
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function draftSuggestions() {
     setBusy('ai')
@@ -783,7 +829,7 @@ function AnalysisSection({
           </button>
           {manage && summary && campaign.state === 'analyzing' && (
             <button type="button" className="primary" disabled={busy !== null}
-              onClick={() => call('start', `/campaigns/${campaign.id}/review/start`, { method: 'POST' })}>
+              onClick={startReview}>
               {busy === 'start' ? 'Starting…' : 'Start review'}
             </button>
           )}
@@ -794,6 +840,7 @@ function AnalysisSection({
         </div>
       )}
       {error && <div className="error">{error}</div>}
+      {mailNote && <div className="notice">{mailNote}</div>}
 
       {campaign.signed_off_at && (
         <div className="notice">
@@ -818,7 +865,18 @@ function AnalysisSection({
             aria-valuenow={progress.decided}>
             <span style={{ width: `${progress.total ? (100 * progress.decided) / progress.total : 0}%` }} />
           </div>
-          {progress.complete && inReview && campaign.is_owner && (
+          {inReview && campaign.is_owner && !progress.complete && (
+            <div className="reminder-row">
+              <button type="button" className="ghost small" disabled={busy !== null} onClick={sendReminders}>
+                {busy === 'remind' ? 'Sending…' : 'Email reminders to reviewers with open items'}
+              </button>
+              <span className="hint">
+                {lastReminder ? `Last sent ${new Date(lastReminder).toLocaleString()}. ` : ''}
+                {campaign.due_date ? `After the due date (${campaign.due_date}), their managers are copied.` : 'Set a due date to copy managers on overdue reviews.'}
+              </span>
+            </div>
+          )}
+                    {progress.complete && inReview && campaign.is_owner && (
             <form
               className="signoff"
               onSubmit={(e) => {

@@ -53,8 +53,9 @@ export default function WorkspaceSettingsPage() {
     setError(null)
     setNotice(null)
     try {
-      await fn()
-      if (ok) setNotice(ok)
+      const r = await fn()
+      const msg = typeof r === 'string' ? r : ok
+      if (msg) setNotice(msg)
       await load()
       await refresh()
     } catch (err) {
@@ -126,9 +127,14 @@ export default function WorkspaceSettingsPage() {
               e.preventDefault()
               const invited = email.trim()
               void act(async () => {
-                await api(`/workspaces/${current.id}/members`, { method: 'POST', body: JSON.stringify({ email: invited, role }) })
+                const r = await api<{ email_sent?: boolean }>(`/workspaces/${current.id}/members`, {
+                  method: 'POST', body: JSON.stringify({ email: invited, role }),
+                })
                 setEmail('')
-              }, `${invited} is invited. Ask them to sign in at uar-copilot.vercel.app with that email address and click Join.`)
+                return r.email_sent
+                  ? `${invited} is invited, and we've emailed them a link. They sign in with that address and click Join.`
+                  : `${invited} is invited. Email isn't set up yet, so ask them to sign in at uar-copilot.vercel.app with that address and click Join.`
+              })
             }}>
               <div className="panel-header"><h2>Invite someone</h2></div>
               <label className="field">
