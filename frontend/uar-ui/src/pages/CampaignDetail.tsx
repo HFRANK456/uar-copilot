@@ -310,7 +310,7 @@ function SourcesSection({ campaign, onChange }: { campaign: Campaign; onChange: 
             <h3>Pull from a connection</h3>
             {pullable.length === 0 ? (
               <p className="panel-text">
-                Connect Google Workspace or Jira in <Link to="/workspace">Workspace settings</Link> to pull users and
+                Connect Microsoft Entra ID, Google Workspace or Jira in <Link to="/workspace">Workspace settings</Link> to pull users and
                 their access directly, without exporting a file.
               </p>
             ) : (

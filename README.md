@@ -86,6 +86,7 @@ system with `validate`, `test`, `pull`), `backend/domain/connections.py`, `backe
 | System | Credentials | Pulls | Writes |
 | --- | --- | --- | --- |
 | Google Workspace | Service account JSON key with domain-wide delegation for the read-only scopes `admin.directory.user.readonly` and `admin.directory.rolemanagement.readonly`, plus an admin email to act as | Every user (suspended/archived → inactive, last sign-in) and each admin role as an entitlement | Nothing |
+| Microsoft Entra ID | App registration in the customer's tenant: tenant ID, client ID and client secret, with admin consent to the application permissions `User.Read.All`, `RoleManagement.Read.Directory`, `AuditLog.Read.All` (Microsoft Graph) | Every user (disabled → inactive; guests flagged; last sign-in when the tenant has Entra ID P1/P2, otherwise a warning) and each directory role (Global Administrator, User Administrator, ...) as an entitlement | Nothing |
 | Jira Cloud | Site, Atlassian account email, API token; optional project key | Atlassian and app (bot) accounts with their groups as entitlements; portal customers skipped. No last-login in Jira's API, and hidden emails fall back to name matching | Remediation tickets in the chosen project (**Send to Jira**), only when clicked |
 
 A pull is stored like an upload: the raw API responses (JSON) are the snapshot, hashed and included
