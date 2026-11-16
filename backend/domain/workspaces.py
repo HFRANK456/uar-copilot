@@ -219,13 +219,30 @@ def invite(engine: Engine, principal: Dict[str, Any], tenant_id: uuid.UUID, emai
         require(me.role, {R.owner}, "invite members")
         existing = session.scalar(select(WorkspaceMember).where(
             WorkspaceMember.tenant_id == tenant_id, WorkspaceMember.email == email))
+        if existing is not None and existing.status == "active":
+            raise WorkspaceError(f"{email} is already a member")
         if existing is not None:
-            raise WorkspaceError(f"{email} is already {'a member' if existing.status == 'active' else 'invited'}")
-        m = WorkspaceMember(tenant_id=tenant_id, email=email, role=r, status="invited",
-                            invited_by=_email(principal) or _sub(principal))
-        session.add(m)
+            # Already invited (perhaps automatically, as a campaign reviewer): update the role and resend.
+            m = existing
+            m.role = r
+            m.invited_by = _email(principal) or _sub(principal)
+        else:
+            m = WorkspaceMember(tenant_id=tenant_id, email=email, role=r, status="invited",
+                                invited_by=_email(principal) or _sub(principal))
+            session.add(m)
         session.commit()
-        return {"id": m.id, "email": email, "role": r.value, "status": "invited"}
+        member_id = m.id
+        tenant = session.get(Tenant, tenant_id)
+        workspace = tenant.name if tenant else "a workspace"
+    # Best-effort: the invitation stands whether or not the email goes out.
+    from backend import mailer
+    from backend.domain.notifications import invitation_text
+
+    subject, text = invitation_text(workspace, r.value,
+                                    _email(principal) or "A colleague", email)
+    sent = mailer.send([email], subject, text)
+    return {"id": member_id, "email": email, "role": r.value, "status": "invited", "email_sent": sent.sent,
+            "email_detail": sent.detail}
 
 
 def respond(engine: Engine, principal: Dict[str, Any], tenant_id: uuid.UUID, accept: bool) -> None:

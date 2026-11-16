@@ -46,7 +46,10 @@ to confirm a change works on the real site with real sign-in, and to report exac
    flagged item shows a "CLAUDE SUGGESTS …" box with a reason and "Based on: …". Jordan Kim's
    AdministratorAccess should be **Revoke**; report the others as they are (wording varies). If it
    says ANTHROPIC_API_KEY is not set, report that and carry on.
-7. **Start review**. You're the campaign owner, not the assigned reviewer, so each item says
+7. **Start review** → a notice "Review started. Emailed N reviewer(s) their items…" (or, if email
+   isn't set up, "Email isn't set up yet…"). Report which one appeared. Don't click **Email
+   reminders** unless the user asks (it emails real people from the roster if their addresses exist).
+   Then continue: You're the campaign owner, not the assigned reviewer, so each item says
    "To decide it yourself, add an override reason". Check that, then type
    "Live check: owner deciding for reviewers" in the **Deciding for reviewers?** box.
    On the critical item click **Keep**: a justification box must appear and its button must stay

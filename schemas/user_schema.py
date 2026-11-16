@@ -217,6 +217,7 @@ class AnalysisOut(BaseModel):
     summary: Optional[Dict[str, Any]]
     progress: Optional[Dict[str, Any]] = None
     items: List[ReviewItemOut]
+    notifications: Optional[Dict[str, Any]] = None  # set by "start review": who was emailed
 
 
 class DecisionIn(BaseModel):

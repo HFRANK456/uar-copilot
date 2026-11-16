@@ -37,6 +37,7 @@ from backend.domain import connections as connection_service
 from backend.domain import export as export_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
+from backend.domain import notifications as notification_service
 from backend.domain import recommendations as recommendation_service
 from backend.domain import remediation as remediation_service
 from backend.domain import review as review_service
@@ -560,7 +561,28 @@ def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)
     ctx.need(MANAGERS, "start the review")
     _review_errors(lambda: review_service.launch_review(ctx.session, c, ctx.actor))
-    return _analysis(ctx, c)
+    try:
+        with ctx.session.begin_nested():  # a failure here rolls back only the notifications
+            notified = notification_service.notify_review_started(ctx.session, c, ctx.actor)
+    except Exception:  # email is best-effort; the review has started either way
+        logging.getLogger("uar.notifications").exception("review start notifications failed")
+        notified = {"emailed": 0, "failed": [], "invited_to_workspace": [], "email_configured": False,
+                    "error": "couldn't send notifications"}
+    out = _analysis(ctx, c)
+    out.notifications = notified
+    return out
+
+
+@router.post("/{campaign_id}/reminders")
+def send_reminders(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "send reminders")
+    try:
+        return {"result": notification_service.send_reminders(ctx.session, c, ctx.actor)}
+    except notification_service.NotificationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
 
 
 @router.post("/{campaign_id}/review-items/{item_id}/decision", response_model=DecisionOut)

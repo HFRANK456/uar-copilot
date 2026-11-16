@@ -285,6 +285,12 @@ export type Analysis = {
   } | null
   progress: ReviewProgress | null
   items: ReviewItem[]
+  notifications?: {
+    emailed: number
+    failed: { email?: string; reason: string }[]
+    invited_to_workspace: string[]
+    email_configured: boolean
+  } | null
 }
 
 export type Remediation = {
