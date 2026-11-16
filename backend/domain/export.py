@@ -160,6 +160,12 @@ def _collect(session: Session, campaign: Campaign) -> Dict[str, Any]:
             "decided_by": d.actor_id if d else None, "decided_at": _iso(d.decided_at) if d else None,
             "decided_by_assigned_reviewer": d.as_assigned_reviewer if d else None,
             "override_reason": d.override_reason if d else None,
+            # Claude's draft suggestion, if one was made, and whether the person's decision matched it.
+            "ai_suggestion": i.recommendation.value if i.recommendation else None,
+            "ai_confidence": (i.recommendation_meta or {}).get("confidence"),
+            "ai_rationale": i.rationale if i.recommendation else None,
+            "ai_model": (i.recommendation_meta or {}).get("model"),
+            "ai_suggestion_followed": (d.action == i.recommendation) if (d and i.recommendation) else None,
         }
         item_rows.append(row)
         item_lookup[i.id] = row
@@ -413,7 +419,10 @@ population/             The uploaded source files, byte-for-byte as received.
 column_mappings.csv     How each file's columns were interpreted, with confidence and who confirmed.
 identities.csv          Which person each account belongs to, how that was decided and by whom.
 findings.csv            Every finding: rule ID and version, severity, the exact inputs, and why it fired.
-review_items.csv        Every reviewed entitlement with its reviewer and final decision.
+review_items.csv        Every reviewed entitlement with its reviewer and final decision. ai_* columns show
+                        Claude's drafted suggestion when one was requested (advisory only; a person made
+                        every decision) and whether the decision matched it. What was sent to Claude and
+                        what came back are in the recommendation.generated events.
 decisions.csv           Full decision history, including decisions that were later changed (superseded=True),
                         who the item was assigned to, and the override reason when someone else decided.
 remediations.csv        Each access change from a revoke/modify decision and how it was confirmed.
@@ -455,7 +464,8 @@ def build_evidence_pack(session: Session, campaign: Campaign, actor: str) -> Evi
         "review_item_id", "severity", "application", "account", "entitlement", "account_type", "person",
         "employment_status",
         "reviewer", "reviewer_email", "decision", "justification", "decided_by", "decided_at",
-        "decided_by_assigned_reviewer", "override_reason", "finding_ids"])
+        "decided_by_assigned_reviewer", "override_reason", "finding_ids", "ai_suggestion", "ai_confidence",
+        "ai_rationale", "ai_model", "ai_suggestion_followed"])
     files["decisions.csv"] = _csv(data["decision_rows"], [
         "decision_id", "review_item_id", "application", "account", "entitlement", "action", "justification",
         "actor", "decided_at", "channel", "superseded", "assigned_reviewer", "assigned_reviewer_email",

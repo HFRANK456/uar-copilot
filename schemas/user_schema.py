@@ -192,6 +192,8 @@ class ReviewItemOut(BaseModel):
     person: Optional[PersonRef]
     reviewer: Optional[PersonRef]
     recommendation: Optional[str]
+    rationale: Optional[str] = None  # Claude's drafted reasoning for `recommendation`
+    recommendation_meta: Optional[Dict[str, Any]] = None  # model, confidence, cited_finding_ids, generated_at/by
     findings: List[FindingOut]
     decision: Optional["DecisionOut"] = None
     is_mine: bool = False

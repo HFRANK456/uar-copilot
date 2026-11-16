@@ -1601,3 +1601,45 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
 .panel .error + .list {
   margin-top: 12px;
 }
+
+/* Claude suggestions */
+.ai-box {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.ai-box p {
+  margin: 4px 0 0;
+  max-width: 70ch;
+}
+
+.ai-suggestion {
+  border-left: 3px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  font-size: 0.9rem;
+}
+
+.ai-suggestion p {
+  margin: 4px 0;
+}
+
+.ai-suggestion.ai-revoke {
+  border-left-color: var(--danger);
+}
+
+.ai-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
