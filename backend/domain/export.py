@@ -373,12 +373,13 @@ def _pdf(campaign: Campaign, data: Dict[str, Any], chain: Dict[str, Any], progre
     else:
         done = sum(1 for r in rem if r["status"] in ("verified", "accepted"))
         pdf.para(f"{len(rem)} access change(s) from revoke/modify decisions; {done} confirmed. 'verified' means a later "
-                 "upload of that application's access list no longer shows the access (the upload is in population/); "
+                 "upload or connector pull of that application's access list no longer shows the access (it is in "
+                 "population/); "
                  "'accepted' means it was closed with a written reason instead. Details in remediations.csv.")
         with pdf.table_ctx(["Change", "Access", "Status", "Ticket / evidence"],
                            [[r["action"], f"{r['application']} {r['entitlement']} ({r['account']})", r["status"],
                              " ".join(x for x in [r["ticket_ref"] or "",
-                                                  f"verified {r['verified_at'][:10]}" if r["verification_method"] == "reupload" and r["verified_at"] else "",
+                                                  f"verified by {'re-pull' if r['verification_method'] == 'repull' else 'upload'} {r['verified_at'][:10]}" if r["verification_method"] in ("reupload", "repull") and r["verified_at"] else "",
                                                   f"reason: {r['note']}" if r["status"] == "accepted" and r["note"] else ""] if x) or "-"]
                             for r in rem], (18, 70, 22, 68)):
             pass

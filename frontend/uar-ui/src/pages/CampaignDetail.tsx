@@ -26,6 +26,8 @@ import { canManage, useWorkspace } from '../workspace'
 
 const INGEST_STATES = new Set(['draft', 'ingesting', 'resolving_identities', 'analyzing'])
 const RESOLVE_STATES = new Set(['ingesting', 'resolving_identities'])
+// Service, shared and bot accounts (e.g. Atlassian's built-in app accounts) aren't people.
+const isBot = (i: ReviewItem) => i.account_type === 'service' || i.account_type === 'shared'
 
 const FILTERS: { key: string; label: string; match: (s: string) => boolean }[] = [
   { key: 'open', label: 'Needs attention', match: (s) => s === 'ambiguous' || s === 'unmatched' },
@@ -697,6 +699,7 @@ function AnalysisSection({
   const [severity, setSeverity] = useState<string>('flagged')
   const [mineOnly, setMineOnly] = useState(false)
   const [pendingOnly, setPendingOnly] = useState(false)
+  const [who, setWho] = useState<'all' | 'people' | 'bots'>('all')
 
   const inReview = campaign.state === 'in_review'
   const reviewed = inReview || ['remediating', 'verifying', 'closed'].includes(campaign.state)
@@ -708,14 +711,19 @@ function AnalysisSection({
   const canRun = manage && ready && (campaign.state === 'resolving_identities' || campaign.state === 'analyzing')
   const summary = analysis?.summary ?? null
   const progress = analysis?.progress ?? null
-  const items = useMemo(() => {
+  const botCount = useMemo(() => (analysis?.items ?? []).filter(isBot).length, [analysis])
+  const { items, hiddenBots } = useMemo(() => {
     let all = analysis?.items ?? []
     if (mineOnly) all = all.filter((i) => i.is_mine)
     if (pendingOnly) all = all.filter((i) => i.status === 'pending')
-    if (severity === 'flagged') return all.filter((i) => i.severity !== 'none')
-    if (severity === 'all') return all
-    return all.filter((i) => i.severity === severity)
-  }, [analysis, severity, mineOnly, pendingOnly])
+    if (severity === 'flagged') all = all.filter((i) => i.severity !== 'none')
+    else if (severity !== 'all') all = all.filter((i) => i.severity === severity)
+    const bots = all.filter(isBot)
+    const humans = all.filter((i) => !isBot(i))
+    if (who === 'people') return { items: humans, hiddenBots: bots }
+    if (who === 'bots') return { items: bots, hiddenBots: [] }
+    return { items: [...humans, ...bots], hiddenBots: [] } // people first
+  }, [analysis, severity, mineOnly, pendingOnly, who])
   const bulkEligible = items.filter(
     (i) => i.status === 'pending' && (i.severity === 'none' || i.severity === 'low') && !i.is_own_access && i.can_decide,
   )
@@ -869,6 +877,14 @@ function AnalysisSection({
             ))}
           </div>
           <div className="filter-row">
+            {botCount > 0 && (
+              <select value={who} onChange={(e) => setWho(e.target.value as 'all' | 'people' | 'bots')}
+                aria-label="Which accounts to show">
+                <option value="all">Everyone (people first)</option>
+                <option value="people">People only</option>
+                <option value="bots">Service and bot accounts ({botCount})</option>
+              </select>
+            )}
             <label className="check">
               <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
               Assigned to me
@@ -893,6 +909,15 @@ function AnalysisSection({
               </button>
             )}
           </div>
+
+          {hiddenBots.length > 0 && (
+            <p className={hiddenBots.some((i) => i.severity !== 'none') ? 'attention-row' : 'hint'}>
+              {hiddenBots.length} service or bot account item(s) hidden
+              {hiddenBots.some((i) => i.severity !== 'none') &&
+                `, ${hiddenBots.filter((i) => i.severity !== 'none').length} with findings`}
+              . They still need a decision before sign-off.
+            </p>
+          )}
 
           {items.length === 0 ? (
             <div className="empty"><p>Nothing here.</p></div>
@@ -1169,7 +1194,9 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
   const [verifyResult, setVerifyResult] = useState<VerifyResult['result'] | null>(null)
   const owner = campaign.is_owner
   const editable = owner && campaign.state === 'remediating'
-  const jira = (useConnections(editable).connections ?? []).filter((c) => c.can_create_tickets)
+  const { connections } = useConnections(editable)
+  const conns = useMemo(() => connections ?? [], [connections])
+  const jira = conns.filter((c) => c.can_create_tickets)
   const [jiraId, setJiraId] = useState('')
   const [sent, setSent] = useState<SendTicketsResult['result'] | null>(null)
 
@@ -1213,6 +1240,23 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
     return [...m.entries()]
   }, [data])
 
+  // An application whose list came from a connection can be re-checked by pulling it again.
+  const verifyConn = useMemo(() => {
+    const name = apps.find(([id]) => id === verifyApp)?.[1]
+    const snap = campaign.snapshots.find((x) => x.kind === 'access_list' && x.application === name && x.source !== 'upload')
+    return snap ? conns.find((c) => c.kind === snap.source) ?? null : null
+  }, [apps, verifyApp, campaign.snapshots, conns])
+
+  async function verifyByPull() {
+    if (!verifyConn || !verifyApp) return
+    await run('repull', async () => {
+      const r = await api<VerifyResult>(`/campaigns/${campaign.id}/remediations/verify-pull`, {
+        method: 'POST', body: JSON.stringify({ application_id: verifyApp, connection_id: verifyConn.id }),
+      })
+      setVerifyResult(r.result)
+    })
+  }
+
   async function verify() {
     if (!verifyFile || !verifyApp) return
     const form = new FormData()
@@ -1235,7 +1279,7 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
       </div>
       <p className="panel-text">
         Every revoke or modify decision is an access change someone has to make. Record the ticket and when it's
-        done, then upload a fresh access list for that application: the change counts as <strong>verified</strong>{' '}
+        done, then upload a fresh access list for that application (or pull it again from its connection): the change counts as <strong>verified</strong>{' '}
         only when the new list no longer shows the access. If a system has no export, accept it with a written reason.
       </p>
       {error && <div className="error">{error}</div>}
@@ -1290,7 +1334,10 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
           {editable && apps.length > 0 && (
             <div className="verify-box">
               <h3>Verify with a fresh access list</h3>
-              <p className="hint">Export the application's current users and roles after IT has made the changes.</p>
+              <p className="hint">
+                After IT has made the changes, upload the application's current users and roles, or, for an
+                application that came from a connection, pull it again.
+              </p>
               <div className="verify-row">
                 <select value={verifyApp} onChange={(e) => setVerifyApp(e.target.value)} aria-label="Application to verify">
                   <option value="">Application…</option>
@@ -1303,14 +1350,23 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
                   {busy === 'verify' ? 'Checking…' : 'Check changes'}
                 </button>
               </div>
-              {verifyResult && (
-                <div className={verifyResult.verified === verifyResult.checked ? 'notice' : 'attention-row'}>
-                  {verifyResult.application}: {verifyResult.verified} of {verifyResult.checked} change(s) confirmed.
-                  {verifyResult.results.filter((x) => !x.verified).map((x) => (
-                    <div key={x.remediation_id}>Still there: {x.account} · {x.entitlement} ({x.detail})</div>
-                  ))}
+              {verifyConn && (
+                <div className="verify-row">
+                  <span className="hint">Or skip the export:</span>
+                  <button type="button" className="primary small" disabled={busy !== null} onClick={verifyByPull}>
+                    {busy === 'repull' ? `Pulling from ${verifyConn.label}…` : `Re-pull from ${verifyConn.label} and check`}
+                  </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {verifyResult && (
+            <div className={verifyResult.verified === verifyResult.checked ? 'notice' : 'attention-row'}>
+              {verifyResult.application}: {verifyResult.verified} of {verifyResult.checked} change(s) confirmed.
+              {verifyResult.results.filter((x) => !x.verified).map((x) => (
+                <div key={x.remediation_id}>Still there: {x.account} · {x.entitlement} ({x.detail})</div>
+              ))}
             </div>
           )}
 
@@ -1363,8 +1419,11 @@ function RemediationRow({
         </div>
         <div className="review-who">
           {r.ticket_ref && <span className="identity-sub">Ticket {r.ticket_ref}</span>}
-          {r.verification_method === 'reupload' && r.verified_at && (
-            <span className="identity-sub">Confirmed by upload, {new Date(r.verified_at).toLocaleDateString()}</span>
+          {(r.verification_method === 'reupload' || r.verification_method === 'repull') && r.verified_at && (
+            <span className="identity-sub">
+              Confirmed by {r.verification_method === 'repull' ? 'a fresh pull' : 'upload'},{' '}
+              {new Date(r.verified_at).toLocaleDateString()}
+            </span>
           )}
           {r.status === 'accepted' && r.note && <span className="identity-sub">Accepted: “{r.note}”</span>}
           {r.status === 'done' && <span className="identity-sub">Marked done by {r.resolved_by}</span>}

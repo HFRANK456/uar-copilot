@@ -640,6 +640,24 @@ def verify_remediations(campaign_id: uuid.UUID, application_id: uuid.UUID = Form
     return {"result": result, "remediations": _remediations(ctx, c)}
 
 
+class VerifyPullIn(BaseModel):
+    application_id: uuid.UUID
+    connection_id: uuid.UUID
+
+
+@router.post("/{campaign_id}/remediations/verify-pull")
+def verify_remediations_by_pull(campaign_id: uuid.UUID, body: VerifyPullIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "verify remediation")
+
+    def run():
+        result = connection_service.verify_with_pull(ctx.session, c, body.application_id, body.connection_id,
+                                                     ctx.actor)
+        return {"result": result, "remediations": _remediations(ctx, c)}
+
+    return _review_errors(lambda: _connector_call(run))
+
+
 class SendTicketsIn(BaseModel):
     connection_id: uuid.UUID
 

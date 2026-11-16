@@ -460,3 +460,77 @@ def test_send_remediation_tickets_to_jira(api, secret_key, mock_http):
 
     ev = [e["type"] for e in api.get(f"/campaigns/{cid}/evidence").json()["events"]]
     assert ev.count("remediation.ticket_sent") == 3
+
+
+# ---------------------------------------------------------------------------
+# Verifying remediation by pulling again
+# ---------------------------------------------------------------------------
+
+
+def _jira_campaign_signed_off(api, jira_id):
+    """HR roster + Jira pull, everything kept except Jordan's site-admins membership (revoked)."""
+    cid = _campaign_with_hr(api)
+    assert api.post(f"/campaigns/{cid}/sources/connection", json={"connection_id": jira_id}).status_code == 201
+    for item in api.post(f"/campaigns/{cid}/identities/resolve").json()["items"]:
+        if item["status"] == "ambiguous":
+            api.post(f"/campaigns/{cid}/identities/{item['account_id']}",
+                     json={"person_id": item["candidates"][0]["person"]["id"]})
+        elif item["status"] == "unmatched":
+            api.post(f"/campaigns/{cid}/identities/{item['account_id']}", json={"account_type": "service"})
+    assert api.post(f"/campaigns/{cid}/analyze").status_code == 200
+    api.post(f"/campaigns/{cid}/review/start")
+    for item in api.get(f"/campaigns/{cid}/review-items").json()["items"]:
+        if item["entitlement"] == "site-admins":
+            body = {"action": "revoke", "override_reason": OVR}
+        else:
+            body = {"action": "keep", "override_reason": OVR,
+                    "justification": "Business need confirmed with the manager"}
+        r = api.post(f"/campaigns/{cid}/review-items/{item['id']}/decision", json=body)
+        assert r.status_code == 200, r.text
+    assert api.post(f"/campaigns/{cid}/sign-off", json={}).json()["state"] == "remediating"
+    return cid
+
+
+def test_verify_remediation_by_pulling_again(api, secret_key, mock_http):
+    jira = _add(api, "jira_cloud", JIRA_CONFIG, JIRA_SECRET).json()
+    google = _add(api, "google_workspace", GOOGLE_CONFIG, GOOGLE_SECRET).json()
+    mock_http.handler = jira_handler
+    cid = _jira_campaign_signed_off(api, jira["id"])
+    apps = {a["name"]: a["id"] for a in api.get(f"/campaigns/{cid}/applications").json()}
+
+    # Only the system that supplied the list can confirm it.
+    r = api.post(f"/campaigns/{cid}/remediations/verify-pull",
+                 json={"application_id": apps["Jira"], "connection_id": google["id"]})
+    assert r.status_code == 422 and "wasn't pulled from Google Workspace" in r.json()["detail"]
+
+    # Still a site admin: nothing is verified.
+    r = api.post(f"/campaigns/{cid}/remediations/verify-pull",
+                 json={"application_id": apps["Jira"], "connection_id": jira["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["result"]["verified"] == 0 and r.json()["result"]["checked"] == 1
+    assert r.json()["result"]["results"][0]["detail"] == "entitlement still held"
+
+    # IT removed Jordan from site-admins: the next pull confirms it.
+    def removed(request):
+        if request.url.path == "/rest/api/3/group/member" and _q(request)["groupId"] == "g-site":
+            return httpx.Response(200, json={"isLast": True, "values": []})
+        return jira_handler(request)
+
+    mock_http.handler = removed
+    r = api.post(f"/campaigns/{cid}/remediations/verify-pull",
+                 json={"application_id": apps["Jira"], "connection_id": jira["id"]})
+    assert r.json()["result"]["verified"] == 1
+    item = r.json()["remediations"]["items"][0]
+    assert item["status"] == "verified" and item["verification_method"] == "repull"
+    assert r.json()["remediations"]["summary"]["ready_to_close"]
+
+    # The pulls are verification evidence, not campaign data.
+    kinds = [x["kind"] for x in api.get(f"/campaigns/{cid}").json()["snapshots"]]
+    assert sorted(kinds) == ["access_list", "hr_roster", "verification", "verification"]
+    ev = api.get(f"/campaigns/{cid}/evidence").json()
+    assert [e["type"] for e in ev["events"]].count("remediation.verification_pull") == 2
+    assert ev["verification"]["valid"]
+    assert api.post(f"/campaigns/{cid}/close").json()["state"] == "closed"
+    from tests.test_campaigns_db import _unzip
+    files = _unzip(api.post(f"/campaigns/{cid}/evidence-pack").content)
+    assert sum(1 for n in files if n.startswith("population/") and "jira_cloud-verify" in n) == 2

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from backend.connectors import google_workspace, jira_cloud, secrets
 from backend.connectors.base import ConnectorError
-from backend.db.models import Campaign, Connection
+from backend.db.models import Application, Campaign, Connection, SourceKind, SourceSnapshot
 from backend.domain import remediation as remediation_service
 from backend.domain.evidence import record_event
 from backend.domain.ingest import IngestResult, load_access_frame
@@ -114,6 +114,33 @@ def pull_into_campaign(session: Session, campaign: Campaign, conn_id: uuid.UUID,
         "config": c.config, "warnings": pulled.warnings}, actor)
     result.warnings = pulled.warnings + result.warnings
     return result
+
+
+def verify_with_pull(session: Session, campaign: Campaign, application_id: uuid.UUID, conn_id: uuid.UUID,
+                     actor: str) -> Dict[str, Any]:
+    """Confirm remediations by pulling the application's current access from the same system it
+    came from, instead of uploading an export. Same comparison and evidence as an upload."""
+    c = _get(session, conn_id)
+    remediation_service._owner(campaign, actor, "verify remediation")
+    remediation_service._require_remediating(campaign)
+    app = session.get(Application, application_id)
+    if app is None:
+        raise LookupError("application not found")
+    came_from = session.scalar(select(SourceSnapshot.id).where(
+        SourceSnapshot.campaign_id == campaign.id, SourceSnapshot.application_id == app.id,
+        SourceSnapshot.kind == SourceKind.access_list, SourceSnapshot.source == c.kind))
+    if came_from is None:
+        # Account IDs differ between systems, so only the system that supplied the list can confirm it.
+        raise ConnectorError(f"{app.name} wasn't pulled from {LABELS[c.kind]} in this campaign; "
+                             "verify it with an uploaded access list instead.")
+    pulled = _run(c, lambda m, cfg, sec: m.pull(cfg, sec))
+    df = pd.DataFrame(pulled.rows, columns=CANONICAL)
+    mappings = [ColumnMapping(source="verification", target=col, matched_column=col, confidence=1.0, method="exact")
+                for col in CANONICAL]
+    filename = f"{c.kind}-verify-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
+    result = remediation_service.verify_frame(session, campaign, app, df, pulled.raw_bytes(), filename, mappings,
+                                              actor, source=c.kind)
+    return {**result, "warnings": pulled.warnings}
 
 
 def send_tickets(session: Session, campaign: Campaign, conn_id: uuid.UUID, actor: str) -> Dict[str, Any]:

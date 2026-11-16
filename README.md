@@ -98,6 +98,11 @@ Jira set each remediation's ticket number and record `remediation.ticket_sent`.
 | `DELETE /connections/{id}` | Remove (data already pulled stays in campaigns) |
 | `POST /campaigns/{id}/sources/connection` | `{connection_id, application?}`: pull an access list |
 | `POST /campaigns/{id}/remediations/send-tickets` | `{connection_id}`: a Jira ticket per open change without one |
+| `POST /campaigns/{id}/remediations/verify-pull` | `{application_id, connection_id}`: confirm changes by pulling that application again from the connection that supplied it (same check as a re-upload; `verification_method` `repull`, event `remediation.verification_pull`) |
+
+In the review list, service, shared and bot accounts (such as Atlassian's built-in app accounts)
+are listed after people, and an **Accounts** filter shows people only or bots only (hidden items are
+counted, with how many have findings).
 
 Tests run the connectors against recorded-format responses through `httpx.MockTransport`
 (`backend.connectors.base.transport_factory`); nothing calls Google or Atlassian.
