@@ -19,6 +19,7 @@ AUTH_DISABLED=true uvicorn backend.main:app --reload   # local dev only
 | `TERMINATION_GRACE_BUSINESS_DAYS` | No | Default `1`. Terminated-but-active within this window is `medium`, after it `high` |
 | `LOG_LEVEL` | No | Default `INFO`. Logs are JSON and never contain row contents |
 | `ANTHROPIC_API_KEY` | For Claude suggestions | Claude API key used to draft reviewer suggestions. Without it, **Draft suggestions with Claude** returns 503 and everything else works |
+| `CRON_SECRET` | For weekly reminders | Shared secret the scheduled job sends as `X-Cron-Secret`; set the same value as the GitHub Actions secret `CRON_SECRET`. Without it the endpoint returns 503 |
 | `RESEND_API_KEY` | For email | Resend API key for invitation, review-start and reminder emails. Without it nothing is emailed and the app says so |
 | `EMAIL_FROM` | No | Sender, e.g. `UAR Copilot <reviews@yourdomain.com>` (a domain verified in Resend). Default `onboarding@resend.dev`, which Resend only delivers to the Resend account's own address |
 | `APP_URL` | No | Base URL for links in emails. Default `https://uar-copilot.vercel.app` |
@@ -145,3 +146,9 @@ anything, and the result is shown and recorded.
   reviewer with undecided items. After the due date the reviewer's manager from the HR roster is
   copied (escalation). Event `review.reminders_sent`.
 - Emails contain counts and a link only, never account names, entitlements or findings.
+- **Weekly automatic reminders**: `.github/workflows/weekly-reminders.yml` runs every Monday 14:17 UTC
+  (and on demand) and calls `POST /internal/weekly-reminders` with the `X-Cron-Secret` header. The
+  backend reminds every in-review campaign that has **automatic reminders** on (default; the owner can
+  switch it off per campaign) and wasn't emailed in the last six days (review start counts). Ledger
+  entries are attributed to `system:weekly-reminders`. A GitHub schedule is used because the free
+  Render plan sleeps when idle; the request also wakes it.

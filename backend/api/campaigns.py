@@ -152,6 +152,8 @@ def _campaign_out(session: Session, c: Campaign, with_snapshots: bool = False, a
         created_at=c.created_at,
         signed_off_by=c.signed_off_by,
         signed_off_at=c.signed_off_at,
+        auto_reminders=c.auto_reminders if c.auto_reminders is not None else True,
+        last_reminder_at=c.last_reminder_at,
         snapshots=snaps,
     )
 
@@ -571,6 +573,21 @@ def start_review(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
     out = _analysis(ctx, c)
     out.notifications = notified
     return out
+
+
+class AutoRemindersIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/{campaign_id}/auto-reminders", response_model=CampaignOut)
+def set_auto_reminders(campaign_id: uuid.UUID, body: AutoRemindersIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "change automatic reminders")
+    try:
+        notification_service.set_auto_reminders(ctx.session, c, ctx.actor, body.enabled)
+    except PermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    return _campaign_out(ctx.session, c, with_snapshots=True, actor=ctx.actor)
 
 
 @router.post("/{campaign_id}/reminders")

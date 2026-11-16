@@ -12,9 +12,10 @@ who was copied, and any failure), so an auditor can see the reviewers were chase
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -100,16 +101,20 @@ def notify_review_started(session: Session, campaign: Campaign, actor: str) -> D
         r = mailer.send([email], f"Access review: {counts['total']} item(s) for you in {campaign.name}", text)
         (sent if r.sent else failed).append({"email": email, "items": counts["total"], **(
             {} if r.sent else {"reason": r.detail})})
+    if sent:
+        campaign.last_reminder_at = datetime.now(timezone.utc)  # the weekly cadence starts here
     summary = {"emailed": len(sent), "failed": failed, "invited_to_workspace": invited,
                "email_configured": mailer.configured()}
     record_event(session, campaign, "review.reviewers_notified", {**summary, "sent": sent}, actor)
     return summary
 
 
-def send_reminders(session: Session, campaign: Campaign, actor: str) -> Dict[str, Any]:
+def send_reminders(session: Session, campaign: Campaign, actor: str, scheduled: bool = False) -> Dict[str, Any]:
+    """Remind reviewers with undecided items. `scheduled` is the weekly job (no signed-in owner)."""
     from backend.domain.review import require_owner
 
-    require_owner(campaign, actor, "send reminders")
+    if not scheduled:
+        require_owner(campaign, actor, "send reminders")
     if campaign.state != CampaignState.in_review:
         raise NotificationError("Reminders can only be sent while the review is in progress.")
     if not mailer.configured():
@@ -142,6 +147,60 @@ def send_reminders(session: Session, campaign: Campaign, actor: str) -> Dict[str
         entry = {"email": email, "pending": counts["pending"], "escalated_to": cc}
         (sent if r.sent else failed).append(entry if r.sent else {**entry, "reason": r.detail})
     summary = {"reminded": len(sent), "escalated": sum(1 for s in sent if s["escalated_to"]), "overdue": overdue,
-               "failed": failed, "invited_to_workspace": invited}
-    record_event(session, campaign, "review.reminders_sent", {**summary, "sent": sent}, actor)
+               "failed": failed, "invited_to_workspace": invited, "scheduled": scheduled}
+    if sent:
+        campaign.last_reminder_at = datetime.now(timezone.utc)
+    record_event(session, campaign, "review.reminders_sent", {**summary, "sent": sent}, actor,
+                 actor_kind="system" if scheduled else "human")
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Weekly job
+# ---------------------------------------------------------------------------
+
+WEEKLY_ACTOR = "system:weekly-reminders"
+MIN_GAP = timedelta(days=6)  # never remind the same campaign twice within this
+
+
+def set_auto_reminders(session: Session, campaign: Campaign, actor: str, enabled: bool) -> None:
+    from backend.domain.review import require_owner
+
+    require_owner(campaign, actor, "change automatic reminders")
+    if campaign.auto_reminders != enabled:
+        campaign.auto_reminders = enabled
+        session.flush()
+        record_event(session, campaign, "review.auto_reminders_changed", {"enabled": enabled}, actor)
+
+
+def run_weekly(engine, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Remind every in-review campaign that has automatic reminders on and wasn't reminded in
+    the last six days, across all workspaces. Called by the scheduled job; returns counts only."""
+    from sqlalchemy.orm import Session as PlainSession
+
+    from backend.db.session import tenant_session
+
+    if not mailer.configured():
+        return {"ran": False, "reason": "email isn't set up on this server"}
+    now = now or datetime.now(timezone.utc)
+    totals = {"ran": True, "campaigns": 0, "reminded": 0, "escalated": 0, "failed": 0, "errors": 0}
+    with PlainSession(engine) as s:
+        tenant_ids = list(s.scalars(select(Tenant.id)))  # the tenant table has no row-level security
+    for tenant_id in tenant_ids:
+        with tenant_session(tenant_id, engine) as session:
+            due = session.scalars(select(Campaign).where(
+                Campaign.state == CampaignState.in_review, Campaign.auto_reminders.is_(True),
+                (Campaign.last_reminder_at.is_(None)) | (Campaign.last_reminder_at < now - MIN_GAP)))
+            for campaign in list(due):
+                try:
+                    with session.begin_nested():  # one campaign's failure doesn't stop the rest
+                        r = send_reminders(session, campaign, WEEKLY_ACTOR, scheduled=True)
+                except Exception:
+                    logging.getLogger("uar.notifications").exception("weekly reminder failed")
+                    totals["errors"] += 1
+                    continue
+                totals["campaigns"] += 1
+                totals["reminded"] += r["reminded"]
+                totals["escalated"] += r["escalated"]
+                totals["failed"] += len(r["failed"])
+    return totals

@@ -12,6 +12,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Optional
 
+from sqlalchemy import true as sa_true
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -276,6 +277,10 @@ class Campaign(TenantOwned, Base):
     rule_set_version: Mapped[Optional[str]] = mapped_column(String(50))
     signed_off_by: Mapped[Optional[str]] = mapped_column(String(255))
     signed_off_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Weekly reminder emails while in review (on by default; the owner can turn them off).
+    auto_reminders: Mapped[bool] = mapped_column(Boolean, default=True, server_default=sa_true())
+    # When reviewers were last emailed (review start, a manual reminder, or the weekly job).
+    last_reminder_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class SourceSnapshot(TenantOwned, Base):
