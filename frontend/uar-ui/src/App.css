@@ -1525,6 +1525,7 @@ button.act.modify { background: #fff3e6; color: #7a2e0e; border-color: #f5c58a; 
   border-radius: 12px;
 }
 
+.filter-row select,
 .member-actions select {
   font: inherit;
   font-size: 0.85rem;

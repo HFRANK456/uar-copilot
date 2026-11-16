@@ -120,7 +120,8 @@ def rows(session: Session, campaign: Campaign) -> List[Dict[str, Any]]:
             "id": r.id, "status": r.status, "action": r.action, "severity": item.severity if item else None,
             "application_id": a.application_id if a else None,
             "application": apps[a.application_id].name if a else None,
-            "account": a.native_id if a else None, "entitlement": e.name if e else None,
+            # Show a readable name: some systems' IDs are opaque (Jira account IDs).
+            "account": (a.username or a.email or a.native_id) if a else None, "entitlement": e.name if e else None,
             "person": (p.name or p.email) if p else None,
             "change": d.justification if d else None,
             "decided_by": d.actor_id if d else None,
@@ -233,7 +234,16 @@ def verify_with_upload(session: Session, campaign: Campaign, application_id: uui
     df = map_columns(_read_table(raw, filename), ACCESS_LIST_ALIASES, "verification", mappings)
     if not ({"native_id", "username", "email"} & set(df.columns)):
         raise IngestError("access list needs a user ID, username or email column")
+    return verify_frame(session, campaign, app, df, raw, filename, mappings, actor)
 
+
+def verify_frame(session: Session, campaign: Campaign, app: Application, df, raw: bytes, filename: Optional[str],
+                 mappings: List[ColumnMapping], actor: str, source: str = "upload") -> Dict[str, Any]:
+    """Shared by uploads and connector pulls: the fresh list is saved as a verification snapshot
+    (never campaign data) and every open remediation for `app` is checked against it."""
+    _owner(campaign, actor, "verify remediation")
+    _require_remediating(campaign)
+    pulled = source != "upload"
     present: Dict[str, Dict[str, Any]] = {}
     for _, row in df.iterrows():
         status = _clean(row.get("status"))
@@ -246,7 +256,7 @@ def verify_with_upload(session: Session, campaign: Campaign, application_id: uui
             if role and active:
                 entry["roles"].add(role)
 
-    snap = _snapshot(session, campaign, SourceKind.verification, raw, filename, actor, df, mappings, app)
+    snap = _snapshot(session, campaign, SourceKind.verification, raw, filename, actor, df, mappings, app, source)
 
     results = []
     for r in rows(session, campaign):
@@ -270,14 +280,14 @@ def verify_with_upload(session: Session, campaign: Campaign, application_id: uui
             rem.status = "verified"
             rem.verified_snapshot_id = snap.id
             rem.verified_at = datetime.now(timezone.utc)
-            rem.verification_method = "reupload"
+            rem.verification_method = "repull" if pulled else "reupload"
         results.append({"remediation_id": str(rem.id), "account": r["account"], "entitlement": r["entitlement"],
                         "action": r["action"], "verified": gone, "detail": why})
     session.flush()
 
     verified = sum(1 for x in results if x["verified"])
-    record_event(session, campaign, "remediation.verification_upload", {
-        "application": app.name, "snapshot_id": snap.id, "sha256": snap.sha256, "filename": filename,
+    record_event(session, campaign, "remediation.verification_pull" if pulled else "remediation.verification_upload", {
+        "application": app.name, "source": source, "snapshot_id": snap.id, "sha256": snap.sha256, "filename": filename,
         "row_count": snap.row_count, "checked": len(results), "verified": verified,
         "still_present": [x for x in results if not x["verified"]],
     }, actor)

@@ -34,6 +34,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 6 | #10 | Reviewer authority (assigned reviewer decides; campaign owner = creator may decide instead with a recorded override reason; others 403; owner-only reassign/app owners/sign-off/remediation/close) and remediation (created at sign-off from revoke/modify; Jira-importable tickets CSV; ticket + mark done; verify by re-uploading an access list (`verification` snapshots, not campaign data); accept with reason; close → `closed`); pack adds remediations.csv and override columns |
 | 7 | #11 | Shared workspaces: `workspace_member` (owner/admin/reviewer/auditor; invited→active), personal workspace auto-created on first sign-in (existing `user:<sub>` tenants backfilled as owners), invites by email accepted in-app (no email sent yet), several workspaces per user (MSP) chosen with the `X-Workspace-Id` header, role checks on every campaign endpoint, workspace owners/admins count as campaign managers; UI workspace switcher, invitation banner, Workspace settings page, role-aware screens |
 | 8 | #12 | Connectors: `connection` table (migration 0006, RLS), credentials Fernet-encrypted with env `CONNECTOR_SECRET_KEY`, Google Workspace (service account + domain-wide delegation, read-only: users, suspended, last login, admin roles) and Jira Cloud (email + API token: users/app accounts with groups; creates remediation tickets). Workspace → Connections (owner/admin; add, test, remove); campaign Sources "Pull from a connection" (raw API JSON is the snapshot, `source.pulled` event); Remediation "Send to Jira". Catalog knows Google/Jira admin roles (rule set 2026.11.3). **Jira verified live 2026-11-15** on the user's free test site `uarcopilot-test.atlassian.net` (project key `KAN`): pull of 44 accounts / 30 group grants (most are Atlassian built-in bot accounts), and Send to Jira created KAN-4. Google not yet tested live |
+| 9 | #13, #14 | Review list: people first, Accounts filter (people / service and bot accounts) with a hidden-items count; remediation verify by re-pulling from the connection that supplied the application (`POST …/remediations/verify-pull`, method `repull`); remediation shows usernames instead of opaque IDs (Jira); verify result stays visible after the last change is confirmed (#14); `/live-check set up Jira` (#13) |
 
 **Phase 1 remaining, in the recommended order:**
 - B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
@@ -41,9 +42,8 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 - **Connectors, next ones** (decided 2026-11-15): Google Workspace and Jira Cloud are built (#12).
   Recommended order after them: an HR source through a unified HRIS API (Merge or Finch) or
   BambooHR directly, then Okta / Microsoft Entra ID, GitHub, AWS IAM Identity Center. Workday
-  directly only when a larger customer needs it. Also: verify remediation by re-pulling from a
-  connection (today verification needs an uploaded file), and expand Google admin roles assigned
-  to groups (today they produce a warning).
+  directly only when a larger customer needs it. Also: expand Google admin roles assigned to groups
+  (today they produce a warning).
 - C. Agent recommendations: Claude drafts keep/revoke + rationale citing finding IDs; schema-validated.
 - D. Reminders and escalation (email) to reviewers.
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
