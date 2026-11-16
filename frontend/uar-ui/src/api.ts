@@ -143,6 +143,8 @@ export type Campaign = {
   signed_off_by: string | null
   signed_off_at: string | null
   snapshots: Snapshot[]
+  auto_reminders?: boolean
+  last_reminder_at?: string | null
 }
 
 export type IngestResult = {

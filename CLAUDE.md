@@ -38,6 +38,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 10 | #15 | Claude suggestions for reviewers (PRD C): `POST /campaigns/{id}/recommendations` (managers; analyzing or in_review) sends de-identified flagged items (no names/emails/usernames/IDs) to `claude-opus-5-5` with `fallbacks: "default"` and a JSON schema; each suggestion must cite its own item's findings or is dropped; stored on `review_item.recommendation/rationale/recommendation_meta` (migration 0007); `recommendation.generated` ledger event with payload SHA-256; pack `review_items.csv` gains `ai_*` columns incl. `ai_suggestion_followed`. Needs `ANTHROPIC_API_KEY` on Render. Not yet run against the real API (no key in the sandbox) |
 | 11 | #16 | Microsoft Entra ID connector (`connectors/entra_id.py`, kind `entra_id`): app registration with client credentials (tenant ID, client ID, secret), Graph application permissions User.Read.All, RoleManagement.Read.Directory, AuditLog.Read.All; users (disabled, guests, `signInActivity` with fallback when the tenant lacks P1/P2) and `directoryRoles?$expand=members` as entitlements; catalog adds Entra roles (rule set 2026.11.4); Connections form with setup steps; `/live-check set up Entra`. Tested with recorded-format Graph responses only; not yet against a real tenant |
 | 12 | #17 | Email via Resend (`backend/mailer.py`, best-effort, `mailer.transport_factory` for tests): workspace invitation emails (re-inviting an invited person updates the role and resends); on start review each assigned reviewer is emailed and auto-added as an invited Reviewer member (`domain/notifications.py`, inside a savepoint so email never blocks the review); owner "Email reminders" button (`POST /campaigns/{id}/reminders`) copies the reviewer's HR manager once the due date has passed; ledger events `review.reviewers_notified`, `review.reminders_sent`; emails carry counts + link only. Env `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`. No automatic schedule yet (reminders are a button) |
+| 13 | #18 | Weekly automatic reminders: GitHub Actions `.github/workflows/weekly-reminders.yml` (Mondays 14:17 UTC + manual run) POSTs `/internal/weekly-reminders` with `X-Cron-Secret` (env `CRON_SECRET` on Render = repo Actions secret `CRON_SECRET`; skips quietly if the GitHub secret is unset); `notifications.run_weekly` reminds in-review campaigns with `campaign.auto_reminders` (migration 0008, default on, owner toggle `POST /campaigns/{id}/auto-reminders`) not emailed in 6 days (`campaign.last_reminder_at`, set by review start and every reminder); ledger actor `system:weekly-reminders`. Chosen over an in-app timer because the Render web service is on the **free plan** and sleeps |
 
 **Phase 1 remaining, in the recommended order:**
 - B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
@@ -47,7 +48,6 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   integration), then Okta, GitHub, AWS IAM Identity Center. Workday
   directly only when a larger customer needs it. Also: expand Google admin roles assigned to groups
   (today they produce a warning).
-- Automatic reminder schedule (e.g. a Render cron calling the reminders endpoint weekly); today reminders are a button.
 - Verify a sending domain in Resend and set `EMAIL_FROM` (until then Resend only delivers to the account owner).
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
   current Render start command `uvicorn main:app` from `backend/` must keep working).
@@ -61,9 +61,10 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack),
   `workspaces`, `connections`, `recommendations`, `notifications`), `llm.py` (Claude client), `mailer.py` (Resend), `connectors/` (`base` httpx client + errors, `secrets` Fernet,
   `google_workspace`, `jira_cloud`, `entra_id`), `api/campaigns.py` (all `/campaigns` routes),
-  `api/workspaces.py` (`/workspaces`), `api/connections.py` (`/connections`).
+  `api/workspaces.py` (`/workspaces`), `api/connections.py` (`/connections`), `api/internal.py`
+  (`/internal/*`, scheduled jobs, `X-Cron-Secret` instead of Auth0).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
-- **Migrations**: `backend/migrations/versions/0001..0007`. A new tenant table must enable and force
+- **Migrations**: `backend/migrations/versions/0001..0008`. A new tenant table must enable and force
   RLS in its migration and be added to `RLS_TABLES` in `db/models.py` (not `TENANT_TABLES`). Run automatically at startup when
   `DATABASE_URL` is set (`RUN_MIGRATIONS=false` opts out). Create new ones with
   `cd backend && alembic revision --autogenerate --rev-id 000N -m "..."`, then `alembic check`.
@@ -93,7 +94,9 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   `CORS_ORIGINS=https://uar-copilot.vercel.app`, `DATABASE_URL` (internal URL),
   `CONNECTOR_SECRET_KEY` (Fernet key for connection credentials; set 2026-11-15; never change
   it without re-adding connections), `ANTHROPIC_API_KEY` (Claude suggestions; added by the user
-  2026-11-16), `RESEND_API_KEY` / `EMAIL_FROM` (email; the user adds them).
+  2026-11-16), `RESEND_API_KEY` / `EMAIL_FROM` (email; the user adds them), `CRON_SECRET`
+  (weekly reminders; the user sets the same value here and as the GitHub Actions secret). The web
+  service is on Render's **free plan** (sleeps when idle; first request after sleep is slow).
 - **Database**: Render Postgres `uar-copilot-db` (`dpg-dbpr4o56e07s73b82po0-a`), **free plan,
   expires 2026-12-11**; upgrade before real customer data. External connections are blocked (empty
   IP allowlist), so it can't be queried from a sandbox; check Render logs instead.

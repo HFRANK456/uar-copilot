@@ -1,0 +1,36 @@
+name: Weekly reviewer reminders
+
+# Every Monday morning (US Eastern), ask the backend to email reviewers who still have
+# undecided items in campaigns that are in review. The backend decides who is due (at most
+# one reminder per campaign per six days, only campaigns with automatic reminders on).
+on:
+  schedule:
+    - cron: "17 14 * * 1"  # Mondays 14:17 UTC = 9:17 EST / 10:17 EDT
+  workflow_dispatch: {}     # "Run workflow" button for a manual run
+
+permissions: {}
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger reminders
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          API_URL: ${{ vars.API_URL || 'https://uar-copilot.onrender.com' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET isn't set in the repository's Actions secrets; skipping."
+            exit 0
+          fi
+          # The backend sleeps when idle; the first request wakes it, so allow for a slow start.
+          for attempt in 1 2 3 4; do
+            status=$(curl -sS -o response.json -w '%{http_code}' --max-time 120 \
+              -X POST "$API_URL/internal/weekly-reminders" -H "X-Cron-Secret: $CRON_SECRET" || echo 000)
+            echo "Attempt $attempt: HTTP $status"
+            if [ "$status" = "200" ]; then cat response.json; echo; exit 0; fi
+            if [ "$status" = "401" ] || [ "$status" = "503" ]; then cat response.json; echo; exit 1; fi
+            sleep 30
+          done
+          exit 1

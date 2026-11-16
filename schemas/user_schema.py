@@ -99,6 +99,8 @@ class CampaignOut(BaseModel):
     is_owner: bool = False
     signed_off_by: Optional[str] = None
     signed_off_at: Optional[_datetime] = None
+    auto_reminders: bool = True
+    last_reminder_at: Optional[_datetime] = None
     snapshots: List[SnapshotOut] = Field(default_factory=list)
 
 

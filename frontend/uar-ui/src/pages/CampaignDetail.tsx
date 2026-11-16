@@ -737,6 +737,7 @@ function AnalysisSection({
   const canSuggest = manage && flagged > 0 && (campaign.state === 'analyzing' || inReview)
   const [aiNote, setAiNote] = useState<string | null>(null)
   const [mailNote, setMailNote] = useState<string | null>(null)
+  const [autoPending, setAutoPending] = useState<boolean | null>(null)
 
   async function startReview() {
     setBusy('start')
@@ -870,6 +871,17 @@ function AnalysisSection({
               <button type="button" className="ghost small" disabled={busy !== null} onClick={sendReminders}>
                 {busy === 'remind' ? 'Sending…' : 'Email reminders to reviewers with open items'}
               </button>
+              <label className="check">
+                <input type="checkbox" checked={autoPending ?? campaign.auto_reminders ?? true} disabled={busy !== null}
+                  onChange={(e) => {
+                    const enabled = e.target.checked
+                    setAutoPending(enabled) // show the new state now; the server confirms it
+                    void call('auto', `/campaigns/${campaign.id}/auto-reminders`, {
+                      method: 'POST', body: JSON.stringify({ enabled }),
+                    }).finally(() => setAutoPending(null))
+                  }} />
+                Also remind them automatically every Monday
+              </label>
               <span className="hint">
                 {lastReminder ? `Last sent ${new Date(lastReminder).toLocaleString()}. ` : ''}
                 {campaign.due_date ? `After the due date (${campaign.due_date}), their managers are copied.` : 'Set a due date to copy managers on overdue reviews.'}
