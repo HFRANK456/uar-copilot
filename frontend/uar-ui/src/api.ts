@@ -229,7 +229,15 @@ export type ReviewItem = {
   last_login_at: string | null
   person: PersonRef | null
   reviewer: PersonRef | null
-  recommendation: string | null
+  recommendation: 'keep' | 'revoke' | 'modify' | null
+  rationale?: string | null
+  recommendation_meta?: {
+    model?: string
+    confidence?: 'low' | 'medium' | 'high'
+    cited_finding_ids?: string[]
+    generated_at?: string
+    generated_by?: string
+  } | null
   findings: Finding[]
   decision: Decision | null
   is_mine: boolean
@@ -401,4 +409,9 @@ export function useConnections(enabled: boolean) {
   }, [reload])
 
   return { connections, error, reload }
+}
+
+export type RecommendationResult = {
+  result: { suggested: number; skipped: number; items_sent: number; model: string | null }
+  analysis: Analysis
 }

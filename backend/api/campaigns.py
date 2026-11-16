@@ -1,6 +1,7 @@
 """Campaign API (Phase 1): create campaigns, ingest sources, read the evidence trail."""
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Iterator, List
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend import llm
 from backend.auth import require_auth
 from backend.connectors.base import ConnectorError
 from backend.connectors.secrets import SecretsUnavailable
@@ -35,6 +37,7 @@ from backend.domain import connections as connection_service
 from backend.domain import export as export_service
 from backend.domain import identity as identity_service
 from backend.domain import ingest as ingest_service
+from backend.domain import recommendations as recommendation_service
 from backend.domain import remediation as remediation_service
 from backend.domain import review as review_service
 from backend.domain.evidence import verify_chain
@@ -456,6 +459,8 @@ def _analysis(ctx: Ctx, c: Campaign, severity: str | None = None, mine: bool = F
             account_type=a.account_type.value, account_status=a.status, last_login_at=a.last_login_at,
             person=_person_ref(person) if person else None, reviewer=_person_ref(reviewer) if reviewer else None,
             recommendation=i.recommendation.value if i.recommendation else None,
+            rationale=i.rationale if i.recommendation else None,
+            recommendation_meta=i.recommendation_meta if i.recommendation else None,
             findings=[_finding_out(f) for f in item_findings],
             decision=_decision_out(decisions[i.id]) if i.id in decisions else None,
             is_mine=bool(me and reviewer and (reviewer.email or "").lower() == me),
@@ -521,6 +526,33 @@ def _review_errors(fn):
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except (review_service.ReviewError, remediation_service.RemediationError, ingest_service.IngestError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@router.post("/{campaign_id}/recommendations")
+def draft_recommendations(campaign_id: uuid.UUID, ctx: Ctx = Depends(get_ctx)):
+    """Ask Claude to draft a suggestion for every flagged item. Advisory only: decisions stay human."""
+    import anthropic
+
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "draft suggestions")
+    try:
+        result = recommendation_service.generate(ctx.session, c, ctx.actor)
+    except llm.LLMUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except recommendation_service.RecommendationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except anthropic.AuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "The server's Claude API key was rejected; ask an admin to check ANTHROPIC_API_KEY.") from exc
+    except anthropic.RateLimitError as exc:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Claude is busy right now; try again in a minute.") from exc
+    except anthropic.BadRequestError as exc:
+        logging.getLogger("uar.recommendations").exception("Claude rejected the request")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Claude rejected the request: {exc.message}") from exc
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        logging.getLogger("uar.recommendations").exception("Claude request failed")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Couldn't reach Claude; try again shortly.") from exc
+    return {"result": result, "analysis": _analysis(ctx, c)}
 
 
 @router.post("/{campaign_id}/review/start", response_model=AnalysisOut)

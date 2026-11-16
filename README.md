@@ -18,6 +18,7 @@ AUTH_DISABLED=true uvicorn backend.main:app --reload   # local dev only
 | `CORS_ORIGINS` | Yes (deployed) | Comma-separated frontend origins, e.g. `https://uar-copilot.vercel.app`. `*` is ignored |
 | `TERMINATION_GRACE_BUSINESS_DAYS` | No | Default `1`. Terminated-but-active within this window is `medium`, after it `high` |
 | `LOG_LEVEL` | No | Default `INFO`. Logs are JSON and never contain row contents |
+| `ANTHROPIC_API_KEY` | For Claude suggestions | Claude API key used to draft reviewer suggestions. Without it, **Draft suggestions with Claude** returns 503 and everything else works |
 | `CONNECTOR_SECRET_KEY` | For connections | Fernet key that encrypts connection credentials at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Without it, adding a connection returns 503. Changing it makes saved connections unreadable (re-add them) |
 
 ## Frontend (`frontend/uar-ui`)
@@ -106,3 +107,23 @@ counted, with how many have findings).
 
 Tests run the connectors against recorded-format responses through `httpx.MockTransport`
 (`backend.connectors.base.transport_factory`); nothing calls Google or Atlassian.
+
+## Claude suggestions for reviewers
+
+After analysis (and until sign-off), a workspace owner or admin can click **Draft suggestions with
+Claude**. For every item with findings, Claude (`claude-opus-5-5`, with Anthropic's default refusal
+fallback) drafts keep / revoke / modify, a short rationale and the findings it relied on. The rules
+engine still decides what is risky; Claude only explains, and a person makes every decision.
+
+- **What is sent**: application, entitlement, privilege tier, account type/status, days since last
+  login, the person's department, title, employment status and dates, and each finding's rule,
+  severity, description and non-identifying inputs. Never names, emails, usernames or account IDs;
+  items are labelled `I1`, findings `I1-F1`.
+- **Validation**: structured output against a JSON schema, then every suggestion must answer an item
+  that was sent and cite at least one of that item's own findings, or it is dropped.
+- **Evidence**: `recommendation.generated` events record the model requested and served, prompt and
+  rule-set versions, the SHA-256 of exactly what was sent, and every suggestion. `review_items.csv` in
+  the pack has `ai_suggestion`, `ai_confidence`, `ai_rationale`, `ai_model` and
+  `ai_suggestion_followed`.
+- Code: `backend/llm.py` (client; tests swap `client_factory` for a fake), `backend/domain/recommendations.py`,
+  `POST /campaigns/{id}/recommendations`.

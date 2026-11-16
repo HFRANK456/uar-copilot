@@ -35,6 +35,7 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 7 | #11 | Shared workspaces: `workspace_member` (owner/admin/reviewer/auditor; invited→active), personal workspace auto-created on first sign-in (existing `user:<sub>` tenants backfilled as owners), invites by email accepted in-app (no email sent yet), several workspaces per user (MSP) chosen with the `X-Workspace-Id` header, role checks on every campaign endpoint, workspace owners/admins count as campaign managers; UI workspace switcher, invitation banner, Workspace settings page, role-aware screens |
 | 8 | #12 | Connectors: `connection` table (migration 0006, RLS), credentials Fernet-encrypted with env `CONNECTOR_SECRET_KEY`, Google Workspace (service account + domain-wide delegation, read-only: users, suspended, last login, admin roles) and Jira Cloud (email + API token: users/app accounts with groups; creates remediation tickets). Workspace → Connections (owner/admin; add, test, remove); campaign Sources "Pull from a connection" (raw API JSON is the snapshot, `source.pulled` event); Remediation "Send to Jira". Catalog knows Google/Jira admin roles (rule set 2026.11.3). **Jira verified live 2026-11-15** on the user's free test site `uarcopilot-test.atlassian.net` (project key `KAN`): pull of 44 accounts / 30 group grants (most are Atlassian built-in bot accounts), and Send to Jira created KAN-4. Google not yet tested live |
 | 9 | #13, #14 | Review list: people first, Accounts filter (people / service and bot accounts) with a hidden-items count; remediation verify by re-pulling from the connection that supplied the application (`POST …/remediations/verify-pull`, method `repull`); remediation shows usernames instead of opaque IDs (Jira); verify result stays visible after the last change is confirmed (#14); `/live-check set up Jira` (#13) |
+| 10 | #15 | Claude suggestions for reviewers (PRD C): `POST /campaigns/{id}/recommendations` (managers; analyzing or in_review) sends de-identified flagged items (no names/emails/usernames/IDs) to `claude-opus-5-5` with `fallbacks: "default"` and a JSON schema; each suggestion must cite its own item's findings or is dropped; stored on `review_item.recommendation/rationale/recommendation_meta` (migration 0007); `recommendation.generated` ledger event with payload SHA-256; pack `review_items.csv` gains `ai_*` columns incl. `ai_suggestion_followed`. Needs `ANTHROPIC_API_KEY` on Render. Not yet run against the real API (no key in the sandbox) |
 
 **Phase 1 remaining, in the recommended order:**
 - B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
@@ -44,7 +45,6 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   BambooHR directly, then Okta / Microsoft Entra ID, GitHub, AWS IAM Identity Center. Workday
   directly only when a larger customer needs it. Also: expand Google admin roles assigned to groups
   (today they produce a warning).
-- C. Agent recommendations: Claude drafts keep/revoke + rationale citing finding IDs; schema-validated.
 - D. Reminders and escalation (email) to reviewers.
 - Also from the PRD Phase 0 list, still open: restructure backend into an `app/` package (deferred;
   current Render start command `uvicorn main:app` from `backend/` must keep working).
@@ -56,11 +56,11 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   mapper), `privileged_access_catalog.py`, `db/models.py`, `db/session.py` (`tenant_session` sets
   `app.tenant_id` with SET LOCAL), `domain/` (`campaigns`, `evidence`, `ingest`, `identity`,
   `analysis`, `review` (authority, decisions, sign-off), `remediation`, `export` (evidence pack),
-  `workspaces`, `connections`), `connectors/` (`base` httpx client + errors, `secrets` Fernet,
+  `workspaces`, `connections`, `recommendations`), `llm.py` (Claude client), `connectors/` (`base` httpx client + errors, `secrets` Fernet,
   `google_workspace`, `jira_cloud`), `api/campaigns.py` (all `/campaigns` routes),
   `api/workspaces.py` (`/workspaces`), `api/connections.py` (`/connections`).
   Schemas in `schemas/user_schema.py` (repo root). Imports always `backend.*`.
-- **Migrations**: `backend/migrations/versions/0001..0006`. A new tenant table must enable and force
+- **Migrations**: `backend/migrations/versions/0001..0007`. A new tenant table must enable and force
   RLS in its migration and be added to `RLS_TABLES` in `db/models.py` (not `TENANT_TABLES`). Run automatically at startup when
   `DATABASE_URL` is set (`RUN_MIGRATIONS=false` opts out). Create new ones with
   `cd backend && alembic revision --autogenerate --rev-id 000N -m "..."`, then `alembic check`.
@@ -89,7 +89,8 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   https://uar-copilot.onrender.com. Env: `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`,
   `CORS_ORIGINS=https://uar-copilot.vercel.app`, `DATABASE_URL` (internal URL),
   `CONNECTOR_SECRET_KEY` (Fernet key for connection credentials; set 2026-11-15; never change
-  it without re-adding connections).
+  it without re-adding connections), `ANTHROPIC_API_KEY` (Claude suggestions; the user adds it in
+  the Render dashboard).
 - **Database**: Render Postgres `uar-copilot-db` (`dpg-dbpr4o56e07s73b82po0-a`), **free plan,
   expires 2026-12-11**; upgrade before real customer data. External connections are blocked (empty
   IP allowlist), so it can't be queried from a sandbox; check Render logs instead.

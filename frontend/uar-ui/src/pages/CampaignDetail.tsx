@@ -6,6 +6,7 @@ import {
   useApi,
   useConnections,
   useDownload,
+  type RecommendationResult,
   type SendTicketsResult,
   type Analysis,
   type Application,
@@ -728,6 +729,27 @@ function AnalysisSection({
     (i) => i.status === 'pending' && (i.severity === 'none' || i.severity === 'low') && !i.is_own_access && i.can_decide,
   )
   const bulkNeedsOverride = bulkEligible.some((i) => i.needs_override)
+  const flagged = (analysis?.items ?? []).filter((i) => i.severity !== 'none').length
+  const suggested = (analysis?.items ?? []).filter((i) => i.recommendation).length
+  const canSuggest = manage && flagged > 0 && (campaign.state === 'analyzing' || inReview)
+  const [aiNote, setAiNote] = useState<string | null>(null)
+
+  async function draftSuggestions() {
+    setBusy('ai')
+    setError(null)
+    setAiNote(null)
+    try {
+      const r = await api<RecommendationResult>(`/campaigns/${campaign.id}/recommendations`, { method: 'POST' })
+      const x = r.result
+      setAiNote(`Claude drafted ${x.suggested} suggestion(s) for ${x.items_sent} flagged item(s)` +
+        (x.skipped ? `; ${x.skipped} didn't pass the checks and were left without one.` : '.'))
+      await onChange()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function call(label: string, path: string, init: RequestInit) {
     setBusy(label)
@@ -843,6 +865,24 @@ function AnalysisSection({
               </p>
             </>
           )}
+
+          {canSuggest && (
+            <div className="ai-box">
+              <div>
+                <strong>Suggestions from Claude</strong>
+                <p className="hint">
+                  Claude reads the findings on the {flagged} flagged item(s) and drafts keep / revoke / modify with a
+                  short reason. It sees roles, job titles and employment dates, never names or emails. Suggestions
+                  are advice only: every decision is still made by a person, and the evidence pack records whether
+                  it matched.
+                </p>
+              </div>
+              <button type="button" className="ghost small" disabled={busy !== null} onClick={draftSuggestions}>
+                {busy === 'ai' ? 'Claude is reviewing…' : suggested > 0 ? 'Redraft suggestions' : 'Draft suggestions with Claude'}
+              </button>
+            </div>
+          )}
+          {aiNote && <div className="notice">{aiNote}</div>}
 
           {campaign.is_owner && <AppOwners campaign={campaign} people={people} onChange={onChange} />}
 
@@ -990,6 +1030,7 @@ function AppOwners({ campaign, people, onChange }: { campaign: Campaign; people:
 }
 
 const ACTION_LABELS: Record<string, string> = { keep: 'Kept', revoke: 'Revoke', modify: 'Modify' }
+const SUGGEST_LABELS: Record<string, string> = { keep: 'Keep', revoke: 'Revoke', modify: 'Modify' }
 
 function ReviewItemRow({
   campaignId,
@@ -1090,6 +1131,29 @@ function ReviewItemRow({
                 <p key={f.id}><code>{f.rule_id} v{f.rule_version}</code> {f.explanation}</p>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {item.recommendation && (
+        <div className={`ai-suggestion ai-${item.recommendation}`}>
+          <span className="ai-label">Claude suggests</span>{' '}
+          <strong>{SUGGEST_LABELS[item.recommendation]}</strong>
+          {item.recommendation_meta?.confidence && (
+            <span className="identity-sub"> · {item.recommendation_meta.confidence} confidence</span>
+          )}
+          {item.decision && (
+            <span className="identity-sub">
+              {' '}· {item.decision.action === item.recommendation ? 'decision matches' : 'decided differently'}
+            </span>
+          )}
+          {item.rationale && <p>{item.rationale}</p>}
+          {(item.recommendation_meta?.cited_finding_ids?.length ?? 0) > 0 && (
+            <span className="identity-sub">
+              Based on:{' '}
+              {item.findings.filter((f) => item.recommendation_meta?.cited_finding_ids?.includes(f.id))
+                .map((f) => RULE_LABELS[f.rule_id] ?? f.rule_id).join(', ')}
+            </span>
           )}
         </div>
       )}

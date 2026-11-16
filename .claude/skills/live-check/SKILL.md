@@ -40,6 +40,12 @@ to confirm a change works on the real site with real sign-in, and to report exac
    → "Every account is resolved."
 6. **Run analysis** → 12 review items: 1 critical (Jordan Kim, AWS AdministratorAccess,
    terminated), 1 high (Priya Shah), 2 medium, 1 low, 7 with no findings.
+6b. Under **Risk analysis**, a **Suggestions from Claude** box says it sends "never names or
+   emails". Only if the user asked (it uses their Claude credit, a few cents), click **Draft
+   suggestions with Claude** → "Claude drafted 5 suggestion(s) for 5 flagged item(s)", and each
+   flagged item shows a "CLAUDE SUGGESTS …" box with a reason and "Based on: …". Jordan Kim's
+   AdministratorAccess should be **Revoke**; report the others as they are (wording varies). If it
+   says ANTHROPIC_API_KEY is not set, report that and carry on.
 7. **Start review**. You're the campaign owner, not the assigned reviewer, so each item says
    "To decide it yourself, add an override reason". Check that, then type
    "Live check: owner deciding for reviewers" in the **Deciding for reviewers?** box.
