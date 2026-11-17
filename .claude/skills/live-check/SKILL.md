@@ -130,6 +130,34 @@ Azure account). They do every sign-in and handle the secret; you do the clicking
    connection** → Microsoft Entra ID → report the counts and warnings exactly (a tenant without
    Entra ID P1/P2 shows "Last sign-in dates aren't available"; that's expected).
 
+## Setting up weekly reminders (only when the user asks, e.g. `/live-check set up weekly reminders`)
+Goal: the Monday reminder job works end to end. It needs the same secret (`CRON_SECRET`) on the
+Render backend and in GitHub, and email (`RESEND_API_KEY`) on Render. **The user creates and pastes
+every secret value**; you never generate, read, copy or type one, and never put one in your report.
+1. Ask the user to create a long random value (30+ characters, e.g. their password manager's
+   generator) and keep it on their clipboard. Wait until they say it's ready.
+2. **Render**: open https://dashboard.render.com/web/srv-d7a5jrbuibrs73fqkiu0/env (the
+   **uar-copilot** web service, not the database). If asked to sign in, hand over. Click **Add
+   Environment Variable**, type the key `CRON_SECRET`, then ask the user to paste the value into the
+   value box. If `RESEND_API_KEY` isn't in the list yet, say so and ask whether to add it now: the
+   user signs up at resend.com, creates an API key and pastes it; you only type the key name. Click
+   **Save, rebuild, and deploy**. Don't change or delete any other variable.
+3. **GitHub**: open https://github.com/HFRANK456/uar-copilot/settings/secrets/actions/new. Type the
+   name `CRON_SECRET`, ask the user to paste the **same** value, click **Add secret**. The secrets
+   list should then show `CRON_SECRET`.
+4. Wait about 3 minutes for Render to finish deploying (the service's Events page shows "Deploy
+   live").
+5. **Test**: open https://github.com/HFRANK456/uar-copilot/actions/workflows/weekly-reminders.yml →
+   **Run workflow** → **Run workflow** (branch `main`). Refresh until the run finishes (a minute or two;
+   the first request wakes the sleeping backend). Open the run → **remind** → **Trigger reminders** and
+   report the last lines. Expected: `HTTP 200` and a line like
+   `{"ran":true,"campaigns":N,"reminded":N,...}`. Meanings:
+   - `"ran":false ... email isn't set up` → `RESEND_API_KEY` is missing on Render.
+   - `HTTP 401` → the two `CRON_SECRET` values differ; ask the user to paste it again in both places.
+   - `HTTP 503 ... CRON_SECRET is not set` → Render hasn't redeployed yet, or the key name is misspelled.
+   - "CRON_SECRET isn't set in the repository's Actions secrets; skipping" → the GitHub secret is missing.
+   `"campaigns":0` is normal when no campaign is in review or all were emailed in the last six days.
+
 ## Report back
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any
 error, a screenshot of anything that failed, and the campaign name you used. If something failed,
