@@ -733,6 +733,19 @@ class SendTicketsIn(BaseModel):
     connection_id: uuid.UUID
 
 
+class EmailTicketsIn(BaseModel):
+    recipient: str
+
+
+@router.post("/{campaign_id}/remediations/email-tickets")
+def email_remediation_tickets(campaign_id: uuid.UUID, body: EmailTicketsIn, ctx: Ctx = Depends(get_ctx)):
+    c = _load(ctx, campaign_id)
+    ctx.need(MANAGERS, "email tickets")
+    result = _review_errors(lambda: remediation_service.email_tickets(
+        ctx.session, c, ctx.actor, body.recipient))
+    return {"result": result, "remediations": _remediations(ctx, c)}
+
+
 @router.post("/{campaign_id}/remediations/send-tickets")
 def send_remediation_tickets(campaign_id: uuid.UUID, body: SendTicketsIn, ctx: Ctx = Depends(get_ctx)):
     c = _load(ctx, campaign_id)

@@ -60,7 +60,15 @@ to confirm a change works on the real site with real sign-in, and to report exac
    with "Downgrade to read access only". → "12 of 12 decided".
 8. **Sign off campaign** with the attestation "Live check". → state badge **Remediating**, the
    Keep/Revoke buttons disappear, and a **Remediation** section shows "0 of 3 confirmed".
-9. **Remediation**: **Download tickets (CSV for Jira import)** downloads a CSV. On jordan.kim, enter
+9. **Remediation**: **Download tickets (CSV for Jira import)** downloads a CSV. The owner also sees
+   **Email tickets to IT**, with an address field and a note explaining which access details are sent.
+   Only when the user explicitly requests email delivery, enter their chosen IT/helpdesk address and
+   click **Email tickets**. Expect "Emailed N ticket(s)." and `email:…` references on sent changes;
+   changes stay open until completed and verified. Existing tickets and resolved changes are skipped.
+   If sending fails, successful sends stay saved and retry sends only the remainder. Check the
+   evidence trail for `remediation.ticket_emailed` (recipient and reference), or
+   `remediation.ticket_email_failed`. Without Resend set up, expect a clear RESEND_API_KEY message.
+   On jordan.kim, enter
    ticket `IT-101`, **Save ticket**, **Mark done** → "Done, not verified". In **Verify with a fresh
    access list**, choose **AWS** and `data/sample_app_access_aws_after_remediation.csv`, then
    **Check changes** → "AWS: 1 of 2 change(s) confirmed" and "Still there: contractor.ext …";
