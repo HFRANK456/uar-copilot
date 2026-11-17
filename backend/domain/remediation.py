@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -350,3 +351,36 @@ def tickets_csv(session: Session, campaign: Campaign) -> bytes:
         w.writerow([t["summary"], t["description"], "Task", t["priority"], "access-review",
                     str(t["remediation"]["id"])])
     return buf.getvalue().encode("utf-8")
+
+
+def email_tickets(session: Session, campaign: Campaign, actor: str, recipient: str) -> Dict[str, Any]:
+    """Email one ticket per unticketed change; preserve successful sends on partial failure."""
+    from backend import mailer
+
+    _owner(campaign, actor, "email remediation tickets")
+    _require_remediating(campaign)
+    recipient = recipient.strip().lower()
+    if len(recipient) > 254 or not re.fullmatch(r"[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+", recipient):
+        raise RemediationError("enter one valid IT or helpdesk email address")
+    if not mailer.configured():
+        raise RemediationError("Email isn't set up yet; ask an admin to set RESEND_API_KEY.")
+    texts = ticket_texts(session, campaign)
+    todo = [t for t in texts if not t["remediation"]["ticket_ref"]]
+    created = []
+    error = None
+    for t in todo:
+        r = t["remediation"]
+        result = mailer.send([recipient], t["summary"],
+                             t["description"] + f"\n\nRemediation ID: {r['id']}\n\n"
+                             + mailer.app_url(f"/campaigns/{campaign.id}"))
+        if not result.sent:
+            error = result.detail
+            record_event(session, campaign, "remediation.ticket_email_failed",
+                         {"remediation_id": r["id"], "recipient": recipient, "error": error}, actor)
+            break
+        ref = f"email:{result.detail}"
+        update(session, campaign, r["id"], actor, ticket_ref=ref)
+        record_event(session, campaign, "remediation.ticket_emailed",
+                     {"remediation_id": r["id"], "recipient": recipient, "ticket_ref": ref}, actor)
+        created.append({"remediation_id": r["id"], "ticket_ref": ref})
+    return {"created": created, "already_had_ticket": len(texts) - len(todo), "error": error}

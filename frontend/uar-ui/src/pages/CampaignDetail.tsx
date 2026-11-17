@@ -1333,6 +1333,8 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
   const jira = conns.filter((c) => c.can_create_tickets)
   const [jiraId, setJiraId] = useState('')
   const [sent, setSent] = useState<SendTicketsResult['result'] | null>(null)
+  const [ticketEmail, setTicketEmail] = useState('')
+  const [emailed, setEmailed] = useState<SendTicketsResult['result'] | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1449,6 +1451,35 @@ function RemediationSection({ campaign, onChange }: { campaign: Campaign; onChan
               </>
             )}
           </div>
+          {editable && (
+            <form className="verify-box" onSubmit={(e) => {
+              e.preventDefault()
+              void run('email-tickets', async () => {
+                setEmailed(null)
+                const r = await api<SendTicketsResult>(`/campaigns/${campaign.id}/remediations/email-tickets`, {
+                  method: 'POST', body: JSON.stringify({ recipient: ticketEmail }),
+                })
+                setEmailed(r.result)
+              })
+            }}>
+              <h3>Email tickets to IT</h3>
+              <p className="hint">Sends one email per change with no ticket yet. Emails include the account,
+                entitlement, risk and requested change. Choose an address authorized to receive these details.</p>
+              <div className="actions">
+                <input type="email" required maxLength={254} aria-label="IT or helpdesk email"
+                  placeholder="IT or helpdesk email" value={ticketEmail}
+                  onChange={(e) => setTicketEmail(e.target.value)} />
+                <button type="submit" className="primary small"
+                  disabled={busy !== null || !ticketEmail.trim() || data!.items.every((r) => r.ticket_ref || r.status === 'verified' || r.status === 'accepted')}>
+                  {busy === 'email-tickets' ? 'Sending…' : 'Email tickets'}
+                </button>
+              </div>
+              {emailed && <div className={emailed.error ? 'error' : 'notice'} role="status">
+                {`Emailed ${emailed.created.length} ticket(s).`}
+                {emailed.error && ` Stopped: ${emailed.error}. Successful sends are saved; retry sends only the remaining tickets.`}
+              </div>}
+            </form>
+          )}
           {sent && (
             <div className={sent.error ? 'error' : 'notice'}>
               {sent.created.length > 0

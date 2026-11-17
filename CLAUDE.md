@@ -41,7 +41,14 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
 | 13 | #18 | Weekly automatic reminders: GitHub Actions `.github/workflows/weekly-reminders.yml` (Mondays 14:17 UTC + manual run) POSTs `/internal/weekly-reminders` with `X-Cron-Secret` (env `CRON_SECRET` on Render = repo Actions secret `CRON_SECRET`; skips quietly if the GitHub secret is unset); `notifications.run_weekly` reminds in-review campaigns with `campaign.auto_reminders` (migration 0008, default on, owner toggle `POST /campaigns/{id}/auto-reminders`) not emailed in 6 days (`campaign.last_reminder_at`, set by review start and every reminder); ledger actor `system:weekly-reminders`. Chosen over an in-app timer because the Render web service is on the **free plan** and sleeps |
 
 **Phase 1 remaining, in the recommended order:**
-- B2. Tickets by email (Jira is done via the Jira connection; the CSV export remains).
+- B2. Tickets by email are built: campaign managers can email one ticket per unticketed open/done
+  remediation to an IT/helpdesk address through Resend (`POST …/remediations/email-tickets`).
+  Emails include the account, entitlement, risk, requested change, remediation ID and campaign link;
+  the form explains this before sending. Successful sends set `ticket_ref` to `email:<message-id>`
+  and record `remediation.ticket_emailed` (recipient and reference). Failure records
+  `remediation.ticket_email_failed`, stops the batch, and preserves earlier successes; retry skips
+  existing tickets (including Jira) and resolved changes. Delivery does not mark a change done or
+  verified. Uses the existing Resend setup; no new environment variables or migration.
 - **Connectors, next ones** (decided 2026-11-15): Google Workspace and Jira Cloud are built (#12).
   Entra ID is built (#16). Next: HR rosters through Finch (decided 2026-11-16: MSP clients are mostly
   on payroll providers like Gusto, ADP, Paychex, Justworks, Rippling; Finch covers them with one
