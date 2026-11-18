@@ -41,9 +41,9 @@ const SIGN_IN_AGAIN = new Set(['login_required', 'consent_required', 'interactio
 /** The signed-in user's access token, sending them to sign in again if it can't be renewed. */
 export function useToken() {
   const { getAccessTokenSilently, loginWithRedirect } = useAuth0()
-  return useCallback(async (): Promise<string> => {
+  return useCallback(async (fresh = false): Promise<string> => {
     try {
-      return await getAccessTokenSilently()
+      return await getAccessTokenSilently(fresh ? { cacheMode: 'off' } : undefined)
     } catch (err) {
       const code = (err as { error?: string }).error
       if (code && SIGN_IN_AGAIN.has(code)) {
@@ -60,9 +60,9 @@ export function useApi() {
   const getToken = useToken()
 
   return useCallback(
-    async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+    async <T,>(path: string, init: RequestInit = {}, freshToken = false): Promise<T> => {
       const headers = new Headers(init.headers)
-      if (authEnabled) headers.set('Authorization', `Bearer ${await getToken()}`)
+      if (authEnabled) headers.set('Authorization', `Bearer ${await getToken(freshToken)}`)
       workspaceHeader(headers)
       if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
         headers.set('Content-Type', 'application/json')
