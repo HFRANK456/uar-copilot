@@ -521,6 +521,7 @@ function InvitationBanner() {
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [verificationNotice, setVerificationNotice] = useState<string | null>(null)
   if (invitations.length === 0 && (emailReady || loading)) return null
 
   async function answer(id: string, accept: boolean) {
@@ -549,7 +550,19 @@ function InvitationBanner() {
           setBusy(true)
           try { await refresh(true) } finally { setBusy(false) }
         }}>{busy ? 'Checking…' : 'Refresh verification'}</button>
+        <button type="button" className="ghost small" disabled={busy} onClick={async () => {
+          setBusy(true)
+          setError(null)
+          setVerificationNotice(null)
+          try {
+            const r = await api<{ detail: string }>('/auth/verification-email', { method: 'POST' })
+            setVerificationNotice(r.detail)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Could not request verification email')
+          } finally { setBusy(false) }
+        }}>Resend verification email</button>
       </div>}
+      {!emailReady && verificationNotice && <div className="notice" role="status">{verificationNotice}</div>}
       {invitations.map((w) => (
         <div key={w.id} className="invite" role="status">
           <span>

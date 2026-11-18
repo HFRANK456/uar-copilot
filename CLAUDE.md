@@ -123,6 +123,11 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   pricing unit.
 
 ## How to work in this repo
+- Self-service verification resend is implemented behind `AUTH0_VERIFICATION_CLIENT_ID`
+  and `AUTH0_VERIFICATION_CLIENT_SECRET` (backend only). It needs an approved dedicated
+  Auth0 M2M application with Management API `update:users`. Not configured or live-tested
+  yet; see `docs/VERIFICATION_EMAIL.md` before release. The signed-in caller can request
+  only their own verification email, with a per-process one-minute cooldown.
 - Reviewer onboarding follow-up (2026-11-18): Auth0 `/userinfo` caches only explicitly verified
   emails, keyed by domain, subject and token digest. Missing/unverified responses and lookup failures
   are retried on the next request. `/workspaces` returns `email_ready`; when false, the app explains
