@@ -167,6 +167,13 @@ every secret value**; you never generate, read, copy or type one, and never put 
    `"campaigns":0` is normal when no campaign is in review or all were emailed in the last six days.
 
 ## Report back
+For reviewer onboarding changes: sign in with a newly created, unverified test reviewer that has a
+pending workspace invitation. Expect a verification explanation and **Refresh verification**. Verify
+the email through the inbox (the user handles sign-in), return to UAR or click the refresh button,
+and expect the invitation without restarting the backend or signing out. Joining still requires an
+explicit click; then the workspace switcher should show the reviewer role. Unverified users must
+never see or accept email-matched invitations.
+
 Reply with a short table: step, expected, what you saw, pass/fail. Include the exact text of any
 error, a screenshot of anything that failed, and the campaign name you used. If something failed,
 say which step and stop there rather than working around it, since the point is to find problems.

@@ -97,13 +97,18 @@ def _get_rsa_key(jwks: Dict[str, Any], kid: str) -> Optional[Dict[str, str]]:
     return None
 
 
-_USERINFO_CACHE: dict[str, tuple[Optional[str], float]] = {}
+_USERINFO_CACHE: dict[tuple[str, str, str], tuple[str, float]] = {}
 _USERINFO_TTL_SECONDS = 60 * 30
 
 
 def _email_from_userinfo(token: str, settings: Auth0Settings, sub: str) -> Optional[str]:
     """Access tokens carry no email by default; ask Auth0 who this is (cached per user)."""
-    cached = _USERINFO_CACHE.get(sub)
+    import hashlib
+
+    # Bind cached identity to the credential and tenant. A renewed token must get
+    # fresh profile data after email verification (never store the bearer itself).
+    cache_key = (settings.domain, sub, hashlib.sha256(token.encode()).hexdigest())
+    cached = _USERINFO_CACHE.get(cache_key)
     if cached and time.time() - cached[1] < _USERINFO_TTL_SECONDS:
         return cached[0]
     email: Optional[str] = None
@@ -113,11 +118,20 @@ def _email_from_userinfo(token: str, settings: Auth0Settings, sub: str) -> Optio
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             info = json.loads(resp.read().decode("utf-8"))
-        if info.get("sub") == sub and info.get("email_verified", True):
-            email = info.get("email")
+        if info.get("sub") == sub and info.get("email_verified") is True:
+            value = info.get("email")
+            if isinstance(value, str) and "@" in value:
+                email = value.strip()
     except Exception:  # identity still comes from the verified token; email is best effort
         logger.warning("userinfo_lookup_failed", extra={"sub": sub})
-    _USERINFO_CACHE[sub] = (email, time.time())
+    # Missing/unverified profiles and transient failures must be retried, not
+    # cached for thirty minutes while a new reviewer is trying to join.
+    if email:
+        now = time.time()
+        for key, (_, fetched_at) in list(_USERINFO_CACHE.items()):
+            if now - fetched_at >= _USERINFO_TTL_SECONDS:
+                _USERINFO_CACHE.pop(key, None)
+        _USERINFO_CACHE[cache_key] = (email, now)
     return email
 
 
@@ -158,6 +172,9 @@ def verify_auth0_token(token: str, settings: Auth0Settings) -> Dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token validation failed.",
         ) from exc
+    # Only explicitly verified token emails may authorize email-based invites.
+    if payload.get("email_verified") is not True:
+        payload.pop("email", None)
     if not payload.get("email") and payload.get("sub"):
         email = _email_from_userinfo(token, settings, payload["sub"])
         if email:

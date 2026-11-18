@@ -10,9 +10,10 @@ type WorkspaceState = {
   invitations: Workspace[]
   current: Workspace | null
   loading: boolean
+  emailReady: boolean
   error: string | null
   select: (id: string) => void
-  refresh: () => Promise<void>
+  refresh: (freshIdentity?: boolean) => Promise<void>
 }
 
 const Ctx = createContext<WorkspaceState | null>(null)
@@ -42,11 +43,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [currentId, setCurrentId] = useState<string | null>(readStored)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [emailReady, setEmailReady] = useState(true)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (freshIdentity = false) => {
     try {
       setActiveWorkspace(null)
-      const body = await api<{ workspaces: Workspace[]; invitations: Workspace[] }>('/workspaces')
+      const body = await api<{ workspaces: Workspace[]; invitations: Workspace[]; email_ready: boolean }>('/workspaces', {}, freshIdentity)
+      setEmailReady(body.email_ready)
       setWorkspaces(body.workspaces)
       setInvitations(body.invitations)
       setError(null)
@@ -68,6 +71,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [authLoading, signedIn, refresh])
 
+  useEffect(() => {
+    if (!signedIn || emailReady) return
+    const onFocus = () => { void refresh(true) }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [signedIn, emailReady, refresh])
+
   // Fall back to the personal workspace if the stored one is gone (e.g. removed from it).
   const current = useMemo(
     () => workspaces.find((w) => w.id === currentId) ?? workspaces.find((w) => w.personal) ?? workspaces[0] ?? null,
@@ -81,8 +91,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ workspaces, invitations, current, loading: loading && signedIn, error, select, refresh }),
-    [workspaces, invitations, current, loading, signedIn, error, select, refresh],
+    () => ({ workspaces, invitations, current, loading: loading && signedIn, emailReady, error, select, refresh }),
+    [workspaces, invitations, current, loading, signedIn, emailReady, error, select, refresh],
   )
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

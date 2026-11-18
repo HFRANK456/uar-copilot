@@ -516,12 +516,12 @@ function WorkspaceSwitcher() {
 }
 
 function InvitationBanner() {
-  const { invitations, refresh, select } = useWorkspace()
+  const { invitations, refresh, select, emailReady, loading, error: workspaceError } = useWorkspace()
   const api = useApi()
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  if (invitations.length === 0) return null
+  if (invitations.length === 0 && (emailReady || loading)) return null
 
   async function answer(id: string, accept: boolean) {
     setBusy(true)
@@ -542,6 +542,14 @@ function InvitationBanner() {
 
   return (
     <div className="invites">
+      {!emailReady && <div className="invite" role="status">
+        <span>We couldn't confirm your email yet. Verify it using the sign-up email, then refresh here to find workspace invitations.
+          If you've already verified it, retry; the identity service may be temporarily unavailable.</span>
+        <button type="button" className="primary small" disabled={busy} onClick={async () => {
+          setBusy(true)
+          try { await refresh(true) } finally { setBusy(false) }
+        }}>{busy ? 'Checking…' : 'Refresh verification'}</button>
+      </div>}
       {invitations.map((w) => (
         <div key={w.id} className="invite" role="status">
           <span>
@@ -554,6 +562,7 @@ function InvitationBanner() {
         </div>
       ))}
       {error && <div className="error">{error}</div>}
+      {workspaceError && <div className="error">{workspaceError}</div>}
     </div>
   )
 }

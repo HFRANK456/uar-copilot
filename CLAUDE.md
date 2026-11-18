@@ -123,6 +123,13 @@ started the review and decided all 7 items on https://uar-copilot.vercel.app.
   pricing unit.
 
 ## How to work in this repo
+- Reviewer onboarding follow-up (2026-11-18): Auth0 `/userinfo` caches only explicitly verified
+  emails, keyed by domain, subject and token digest. Missing/unverified responses and lookup failures
+  are retried on the next request. `/workspaces` returns `email_ready`; when false, the app explains
+  verification and offers **Refresh verification**, which renews the token and reloads invitations.
+  Returning focus also refreshes while email is unresolved. No restart or manual logout is required.
+  Regression coverage in `tests/test_auth_onboarding.py` includes verification followed by invitation
+  acceptance, transient failures, renewed credentials and rejecting unverified/mismatched identities.
 - Workflow so far: one slice per PR on branch `claude/admiring-faraday-bq46yw`, restarted from
   `origin/main` after each merge (`git fetch origin main && git checkout -B <branch> origin/main`).
   Normal fast-forward pushes; no force-push. The user merges PRs themselves; Claude watches CI.

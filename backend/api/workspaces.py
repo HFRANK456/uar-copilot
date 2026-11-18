@@ -46,8 +46,9 @@ def _call(fn: Callable[[], Any]) -> Any:
 
 
 @router.get("")
-def list_workspaces(principal: dict = Depends(require_auth)) -> Dict[str, List[Dict[str, Any]]]:
-    return _call(lambda: ws.memberships(_engine(), principal))
+def list_workspaces(principal: dict = Depends(require_auth)) -> Dict[str, Any]:
+    result = _call(lambda: ws.memberships(_engine(), principal))
+    return {**result, "email_ready": bool(principal.get("email"))}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
