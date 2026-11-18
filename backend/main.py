@@ -19,6 +19,7 @@ from backend.api.campaigns import router as campaigns_router  # noqa: E402
 from backend.api.connections import router as connections_router  # noqa: E402
 from backend.api.internal import router as internal_router  # noqa: E402
 from backend.api.workspaces import router as workspaces_router  # noqa: E402
+from backend.api.verification import router as verification_router  # noqa: E402
 from backend.auth import auth_disabled, require_auth  # noqa: E402
 from backend.rule_registry import RULE_SET_VERSION  # noqa: E402
 from backend.rules import aggregate_results, compute_flags, evaluate_rules, merge_data  # noqa: E402
@@ -63,6 +64,7 @@ app.include_router(campaigns_router)
 app.include_router(workspaces_router)
 app.include_router(connections_router)
 app.include_router(internal_router)
+app.include_router(verification_router)
 
 
 def _run_migrations() -> None:
